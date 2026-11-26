@@ -1,5 +1,5 @@
 // App shell cache only. Data always comes live from Microsoft 365.
-const SHELL = 'omni-cc-v3';
+const SHELL = 'omni-cc-v4';
 const FILES = ['./', 'index.html', 'styles.css?v=3', 'config.js?v=3', 'app.js?v=3',
   'lib/msal-browser.min.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png'];
 self.addEventListener('install', e => {

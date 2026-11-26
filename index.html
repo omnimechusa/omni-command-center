@@ -12,12 +12,12 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="styles.css?v=3">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 <header id="top">
   <div class="brand"><span class="dot"></span><b>OMNI</b> COMMAND</div>
-  <div class="topright"><span id="stamp"></span><button id="refresh" aria-label="Refresh">⟳</button></div>
+  <div class="topright"><span id="seatbadge" class="seatbadge" onclick="OMNI.go('command','seats')"></span><span id="stamp"></span><button id="refresh" aria-label="Refresh">⟳</button></div>
 </header>
 <nav id="sub"></nav>
 <main id="view"><div class="loading">Loading…</div></main>
@@ -29,8 +29,8 @@
   <button data-tab="marketing"><i>✦</i>Marketing</button>
 </nav>
 <div id="sheet" hidden><div class="sheetbox"><button class="close" id="sheetclose">✕</button><div id="sheetbody"></div></div></div>
-<script src="config.js?v=3"></script>
+<script src="config.js?v=4"></script>
 <script src="lib/msal-browser.min.js"></script>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

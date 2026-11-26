@@ -129,7 +129,7 @@ const L = {
   followups: () => data('followups', () => spJSON(board('proposal/followups.json')), 10),
   wrap: () => data('wrap', () => spText('Open Construction Projects/Claude outputs/wrapup/wrapup.html'), 30),
   ref: () => data('ref', () => spJSON(board('marketing/ref.json')), 600),
-  qbo: () => data('qbolive', () => spJSON(board('finance/qbo/live.json')), 30),
+  qbo: () => data('qbolive', async () => { try { return await qboFromMail(); } catch (e) { const j = await spJSON(board('finance/qbo/live.json')); j.source = (j.source || '') + ' [fallback: ' + e.message + ']'; return j; } }, 30),
   score: () => data('score', async () => parseCSV(await spText(board('finance/scorecard/summary.csv'))), 60),
   scoreStatus: () => data('scoreStatus', () => spJSON(board('finance/scorecard/status.json')), 60),
   paymix: () => data('paymix', () => spJSON(board('finance/paymix-pc.json')).catch(() => spJSON(board('finance/paymix.json'))), 240),
@@ -159,9 +159,73 @@ function loadXlsx() { return xlsxLoaded || (xlsxLoaded = new Promise((res, rej) 
 async function readXlsx(buf) { await loadXlsx(); const wb = XLSX.read(buf, {type: 'array'}); const out = {};
   wb.SheetNames.forEach(n => { out[n] = XLSX.utils.sheet_to_json(wb.Sheets[n], {header: 1, raw: false, defval: ''}); }); return out; }
 
+/* QuickBooks report emails (CC A/R Aging Summary, CC A/P Aging Summary, CC Balance Sheet, daily 5 AM Excel) -> Cash/A/R/A/P */
+function qnum(v) { if (v === '' || v == null) return null; const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[$,]/g, '').replace(/^\((.*)\)$/, '-$1')); return isNaN(n) ? null : n; }
+function agingFromRows(rows) {
+  const hi = rows.findIndex(r => r.some(c => /^current$/i.test(String(c).trim())));
+  if (hi < 0) throw new Error('No aging header in QuickBooks report');
+  const head = rows[hi].map(c => String(c).trim()); const cols = head.slice(1);
+  const body = rows.slice(hi + 1).filter(r => String(r[0] || '').trim());
+  const parents = new Set(body.map(r => String(r[0]).trim()).filter(l => /^Total for /i.test(l)).map(l => l.replace(/^Total for /i, '')));
+  const stack = [], top = new Map(); let grand = null;
+  for (const r of body) {
+    const label = String(r[0]).trim(); const nums = r.slice(1, head.length).map(qnum);
+    if (/^TOTAL$/i.test(label)) { grand = nums; continue; }
+    if (/^Total for /i.test(label)) { const nm = label.replace(/^Total for /i, ''); const i = stack.lastIndexOf(nm); if (i >= 0) stack.length = i; if (!stack.length) top.set(nm, nums); continue; }
+    if (parents.has(label)) { stack.push(label); continue; }
+    if (!nums.some(n => n != null)) { continue; }
+    if (!stack.length) top.set(label, nums);
+  }
+  const ti = cols.findIndex(c => /^total$/i.test(c));
+  const bucketCols = cols.map((c, i) => i).filter(i => i !== ti);
+  const name = c => c.replace(/\s+/g, '').replace(/^CURRENT$/i, 'Current').replace(/^91ANDOVER$/i, '91+').replace(/^(\d+)-(\d+)$/, '$1-$2');
+  const buckets = {}; bucketCols.forEach(i => { buckets[name(cols[i])] = Math.round(((grand ? grand[i] : [...top.values()].reduce((s, v) => s + (v[i] || 0), 0)) || 0) * 100) / 100; });
+  const people = [...top.entries()].map(([n, v]) => ({name: n, total: Math.round((v[ti] || 0) * 100) / 100, b: v}));
+  const total = grand ? grand[ti] : people.reduce((s, p) => s + p.total, 0);
+  const check = Math.abs(people.reduce((s, p) => s + p.total, 0) - total) < 1;
+  return {total: Math.round(total * 100) / 100, buckets, people, bucketCols, check};
+}
+function cashFromBS(rows) {
+  const lab = r => String(r[0] || '').trim();
+  const a = rows.findIndex(r => /^Bank Accounts$/i.test(lab(r))), b = rows.findIndex(r => /^Total Bank Accounts$/i.test(lab(r)));
+  const cash = a >= 0 && b > a ? rows.slice(a + 1, b).filter(r => qnum(r[1]) != null).map(r => ({name: lab(r).replace(/^\d{3,5}\s+/, ''), balance: qnum(r[1])})) : [];
+  const get = re => { const r = rows.find(r => re.test(lab(r))); return r ? qnum(r[1]) : null; };
+  const dep = get(/^Payments to deposit$/i); if (dep) cash.push({name: 'Payments to deposit (undeposited)', balance: dep});
+  const asOf = (rows.find(r => /^As of /i.test(lab(r))) || [''])[0];
+  return {cashTotal: b >= 0 ? qnum(rows[b][1]) : null, cash, creditCards: get(/^Total Credit Cards$/i), asOfText: String(asOf), workingCapital: (get(/^Total Current Assets$/i) || 0) - (get(/^Total Current Liabilities$/i) || 0)};
+}
+function qboBuild(ar, ap, bs) {
+  const out = {source: 'QuickBooks 5 AM report emails (CC A/R Aging Summary, CC A/P Aging Summary, CC Balance Sheet)'};
+  if (bs) Object.assign(out, cashFromBS(bs.rows), {asOf: bs.at});
+  if (ar) { const x = agingFromRows(ar.rows); const over = Object.keys(x.buckets).filter(k => /61|91/.test(k));
+    const oi = x.bucketCols.filter((i, j) => /61|91/.test(Object.keys(x.buckets)[j]));
+    out.ar = {total: x.total, buckets: x.buckets, check: x.check, over60: over.reduce((s, k) => s + x.buckets[k], 0),
+      customers: x.people.filter(p => p.total > 0).map(p => ({name: p.name, total: p.total, over60: oi.reduce((s, i) => s + (p.b[i] || 0), 0)})).sort((a, b) => b.total - a.total)};
+    out.asOf = out.asOf || ar.at; }
+  if (ap) { const x = agingFromRows(ap.rows); const keys = Object.keys(x.buckets);
+    const oi = x.bucketCols.filter((i, j) => /31|61|91/.test(keys[j]));
+    out.ap = {total: x.total, buckets: x.buckets, check: x.check, over30: keys.filter(k => /31|61|91/.test(k)).reduce((s, k) => s + x.buckets[k], 0),
+      vendors: x.people.filter(p => p.total > 0).map(p => ({name: p.name, total: p.total, over30: oi.reduce((s, i) => s + (p.b[i] || 0), 0)})).sort((a, b) => b.total - a.total)}; }
+  return out;
+}
+
+
+async function qboFromMail() {
+  const since = new Date(Date.now() - 6 * 864e5).toISOString();
+  const r = await g(`/me/messages?$filter=receivedDateTime ge ${since} and from/emailAddress/address eq 'quickbooks@notification.intuit.com'&$orderby=receivedDateTime desc&$top=40&$select=subject,receivedDateTime,hasAttachments`);
+  const pick = subj => (r.value || []).find(m => (m.subject || '').trim().toLowerCase() === subj.toLowerCase() && m.hasAttachments);
+  const load = async subj => { const m = pick(subj); if (!m) return null;
+    const a = await g(`/me/messages/${m.id}/attachments?$select=id,name`); const f = (a.value || []).find(x => /\.xlsx$/i.test(x.name)); if (!f) return null;
+    const buf = DEMO ? await g('/att/' + f.id) : await (await g(`/me/messages/${m.id}/attachments/${f.id}/$value`, {raw: true})).arrayBuffer();
+    const wb = await readXlsx(buf); return {at: m.receivedDateTime, rows: Object.values(wb)[0]}; };
+  const [ar, ap, bs] = await Promise.all([load('CC A/R Aging Summary'), load('CC A/P Aging Summary'), load('CC Balance Sheet')]);
+  if (!ar && !ap && !bs) throw new Error('No QuickBooks report emails in the last 6 days');
+  return qboBuild(ar, ap, bs);
+}
+
 /* ---------------- router ---------------- */
 const TABS = {
-  command: [['today', 'Today'], ['inbox', 'Inbox'], ['drafts', 'Drafts'], ['todo', 'To Do'], ['admin', 'Admin To Do'], ['queue', 'Ask Claude'], ['work', 'Work'], ['systems', 'Systems Review'], ['dash', 'Dashboards']],
+  command: [['today', 'Today'], ['inbox', 'Inbox'], ['drafts', 'Drafts'], ['todo', 'To Do'], ['admin', 'Admin To Do'], ['queue', 'Ask Claude'], ['work', 'Work'], ['systems', 'Systems Review'], ['dash', 'Dashboards'], ['seats', 'Seats']],
   construction: [['checkins', 'Daily Check-Ins'], ['wrap', 'Wrap-Up'], ['jobs', 'Job Board'], ['thursday', 'Thursday Reports'], ['permits', 'Permits'], ['permitdesk', 'Permit Desk']],
   sales: [['due', 'Bids due'], ['followups', 'Follow-ups'], ['submitted', 'Submitted'], ['hold', 'On hold'], ['kit', 'Tools'], ['bidboard', 'Bid Board']],
   finance: [['cash', 'Cash · A/R · A/P'], ['plan', '2027 Plan'], ['pl', 'P&L by dept'], ['score', 'Scorecard'], ['paymix', 'Payment mix'], ['tools', 'Tool Accounts']],
@@ -175,7 +239,7 @@ $('#refresh').onclick = () => { Object.keys(mem).forEach(k => delete mem[k]); re
 
 let seq = 0;
 async function render() {
-  const my = ++seq;
+  const my = ++seq; refreshSeat();
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === cur.tab));
   $('#sub').innerHTML = TABS[cur.tab].map(([k, l]) => `<button data-s="${k}" class="${k === sub() ? 'on' : ''}">${esc(l)}</button>`).join('');
   $('#sub').querySelectorAll('button').forEach(b => b.onclick = () => go(cur.tab, b.dataset.s));
@@ -208,7 +272,8 @@ V.command_today = async () => {
   const flags = latest.filter(c => c.flags.length);
   const needsTom = permits ? Object.values(permits.portals || {}).filter(p => p.needsTom).length : 0;
   const evs = cal ? (cal.value || []).filter(e => ymd(utc(e.start.dateTime)) === t) : [];
-  let h = `<h2>Good ${new Date().getHours() < 12 ? 'morning' : 'afternoon'}${me ? ', ' + esc((me.displayName || '').split(' ')[0]) : ''}<small>${esc(day(new Date()))}</small></h2>
+  const engSeat = /engineering/.test(SEAT.primary);
+  let h = (engSeat ? `<div class="card flag" onclick="OMNI.go('command','seats')"><div class="t">Takeover on: engineering@ is the active Claude seat</div><div class="s">Tap for seat details or to hand back.</div></div>` : '') + `<h2>Good ${new Date().getHours() < 12 ? 'morning' : 'afternoon'}${me ? ', ' + esc((me.displayName || '').split(' ')[0]) : ''}<small>${esc(day(new Date()))}</small></h2>
   <div class="kpis">${kpi(unread, 'Unread in Inbox', unread > 0 ? 'hot' : '')}${kpi(dueWeek.length, 'Bids due in 7 days', dueWeek.length ? 'hot' : '')}
   ${kpi(late.length, 'Active bids past due', late.length ? 'warn' : '')}${kpi(flags.length + '/' + latest.length, 'Check-ins flagged', flags.length ? 'warn' : '')}</div>`;
   h += `<h2>Today<small>${evs.length} on the calendar</small></h2>`;
@@ -346,7 +411,7 @@ V.finance_cash = async () => {
   let q; try { q = await L.qbo(); } catch (e) { q = null; }
   if (!q) return `<div class="card flag"><div class="t">Waiting on the QuickBooks export</div><div class="s">Cash, A/R and A/P come from Claude outputs/boards/finance/qbo/live.json, which your PC writes from the QuickBooks report emails. It isn't there yet.</div></div>`;
   const ar = q.ar || {}, ap = q.ap || {};
-  let h = `<div class="muted">QuickBooks as of ${esc(dfmt(q.asOf, {month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'}))}</div>
+  let h = `<div class="muted">QuickBooks ${esc(q.asOfText || '')} · emailed ${esc(dfmt(q.asOf, {month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'}))}${(q.ar && q.ar.check === false) || (q.ap && q.ap.check === false) ? ' · <span style="color:var(--warn)">totals check off, verify in QuickBooks</span>' : ''}</div>
   <div class="kpis">${kpi(kmoney(q.cashTotal), 'Cash in bank', 'hot')}${kpi(kmoney(ar.total), 'A/R open')}${kpi(kmoney(ar.over60), 'A/R over 60 days', ar.over60 > 0 ? 'warn' : '')}${kpi(kmoney(ap.total), 'A/P open')}</div>`;
   if (q.cash && q.cash.length) h += `<h2>Bank accounts</h2><div class="tbl"><table>${q.cash.map(c => `<tr><td>${esc(c.name)}</td><td class="n">${money(c.balance, 2)}</td></tr>`).join('')}</table></div>`;
   const aging = (o) => o.buckets ? `<div class="tbl"><table><tr>${Object.keys(o.buckets).map(k => `<th class="n">${esc(k)}</th>`).join('')}</tr><tr>${Object.values(o.buckets).map(v => `<td class="n">${kmoney(v)}</td>`).join('')}</tr></table></div>` : '';
@@ -601,7 +666,7 @@ async function queueWrite(fn) { /* read-modify-write boards/cc/inbox.json */
 }
 async function queueAdd(item) {
   const id = 'i' + Date.now() + Math.random().toString(36).slice(2, 6); const now = new Date().toISOString();
-  await queueWrite(d => { d[id] = Object.assign({kind: 'ask', ref: '', title: '', text: '', status: 'new', createdAt: now, _at: now, from: 'phone app'}, item); });
+  await queueWrite(d => { d[id] = Object.assign({kind: 'ask', ref: '', title: '', text: '', status: 'new', createdAt: now, _at: now, from: 'phone app', seat: SEAT.primary}, item); });
   return id;
 }
 V.command_queue = async () => {
@@ -651,12 +716,37 @@ const DASHES = {
   'Other': [['Desktop Command Center', 'Ni1J4DsD6J2it5XdBC1Epi', 'Full board on claude.ai'], ['Uniform Order', 'DmjEGWzYQApfNVmiU3Tfws', 'Uniform ordering'], ['BuildOps Entry Desk', 'NHGSPaFamtjWMqRdbTVNMf', 'Job/project setup queue'], ['QBO Change Log', 'VdFfd5pLWTSE6Zhc9xB7X7', 'QuickBooks change batches']]
 };
 V.command_dash = async () => Object.entries(DASHES).map(([g0, arr]) => `<h2>${esc(g0)}</h2>` + arr.map(([n, id, d]) =>
-  `<a class="card" style="display:block;text-decoration:none;color:inherit" href="https://claude.ai/artifact/${id}" target="_blank" rel="noopener"><div class="row"><div><div class="t">${esc(n)}</div><div class="s">${esc(d)}</div></div><span class="btn">Open ↗</span></div></a>`).join('')).join('')
+  `<a class="card" style="display:block;text-decoration:none;color:inherit" href="https://claude.ai/artifact/${n === 'Desktop Command Center' ? (SEAT_BOARDS[SEAT.primary] || id) : id}" target="_blank" rel="noopener"><div class="row"><div><div class="t">${esc(n)}${n === 'Desktop Command Center' ? ' (' + esc(SEAT.primary) + ')' : ''}</div><div class="s">${esc(d)}</div></div><span class="btn">Open ↗</span></div></a>`).join('')).join('')
   + `<div class="muted">These open in the Claude app.</div>`;
+
+/* ---------------- Seats: which Claude seat is primary (SharePoint boards/cc/active.json, flipped with ledger line 1) ---------------- */
+const SEAT_BOARDS = {'tcm@': 'JemzpN7zAm6YNY5xhoV6YK', 'engineering@': 'Ni1J4DsD6J2it5XdBC1Epi'};
+L.seat = () => data('seat', () => spJSON(C.paths.boards + '/cc/active.json'), 2);
+let SEAT = store.get('seat', {primary: 'tcm@'});
+async function refreshSeat() {
+  try { const s = await L.seat(); if (s && s.primary) { SEAT = s; store.set('seat', s); } } catch (_) {}
+  const b = document.getElementById('seatbadge');
+  if (b) { const eng = /engineering/.test(SEAT.primary); b.textContent = eng ? 'ENG@' : 'TCM@'; b.className = 'seatbadge' + (eng ? ' eng' : ''); b.title = 'Active Claude seat: ' + SEAT.primary; }
+  C.links.claudeBoard = 'https://claude.ai/artifact/' + (SEAT_BOARDS[SEAT.primary] || SEAT_BOARDS['tcm@']);
+  return SEAT;
+}
+V.command_seats = async () => {
+  const s = await refreshSeat(); const eng = /engineering/.test(s.primary);
+  const q = await L.queue().catch(() => ({docs: {}}));
+  const pending = Object.values(q.docs || {}).filter(i => i.kind === 'seat' && /new|working/.test(i.status || ''));
+  return `<div class="kpis">${kpi(esc(s.primary), 'Active Claude seat', 'hot')}${kpi(esc(s.since ? when(s.since) : '–'), 'Since')}</div>
+  <div class="card ${eng ? 'flag' : 'good'}"><div class="t">${eng ? 'Takeover: engineering@ is running things' : 'Normal: tcm@ is primary'}</div>
+  <div class="s">The phone app reads the same SharePoint data either way. The seat decides which Claude account runs the queue, tasks and the desktop board.</div>
+  <div class="acts"><a class="btn pri" href="${C.links.claudeBoard}" target="_blank" rel="noopener">Open ${esc(s.primary)} desktop board</a></div></div>
+  <h2>Switch seats</h2><div class="card"><div class="s">Queues the switch for Claude. It flips the ledger, the mirror log and active.json, and turns the mirror tasks on or off (omni-handoff-ledger). The app follows on the next refresh.</div>
+  <div class="acts">${eng ? `<button class="btn pri" onclick="OMNI.seat('hand back')">Hand back to tcm@</button>` : `<button class="btn pri" onclick="OMNI.seat('take over')">Take over with engineering@</button>`}</div>
+  ${pending.length ? `<div class="p muted">Switch already queued ${esc(when(pending[0].createdAt))}: "${esc(pending[0].text)}"</div>` : ''}</div>`;
+};
 
 /* ---------------- actions ---------------- */
 window.OMNI = {
-  go, tool: openTool, set(k, v) { store.set(k, v); render(); },
+  go, tool: openTool,
+  async seat(action) { try { await queueAdd({kind: 'seat', title: action === 'take over' ? 'Take over: make engineering@ primary' : 'Hand back: make tcm@ primary', text: action, project: 'Org Instructions', projectId: '01a123f3-23f0-74f4-ba0d-6982b034e16d'}); toast('Seat switch queued for Claude'); render(); } catch (e) { toast(e.message); } }, set(k, v) { store.set(k, v); render(); },
   pickList(k, id) { store.set(k, id); render(); },
   adminSet(type, v) { if (type === 'link' && !/^https?:\/\//.test(v)) return toast('Paste the full https:// link'); store.set('admin', type === 'todo' ? {type, id: v} : {type, url: v, name: 'Admin To Do'}); render(); },
   adminReset() { store.set('admin', null); render(); },
