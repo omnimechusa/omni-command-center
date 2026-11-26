@@ -796,6 +796,7 @@ V.marketing_uniforms = async () => {
 /* ---------- Lead-Time Log: SharePoint boards/leadtime/items.json (team edits) + pos.json (PC script, open BuildOps POs) ---------- */
 L.lead = () => data('lead', () => spJSON(board('leadtime/items.json')), 5);
 L.leadPOs = () => data('leadPOs', () => spJSON(board('leadtime/pos.json')), 60);
+const addDays = (base, n) => { const t = todayYMD(); const b = base && base >= t ? base : t; const d = new Date(b + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const LEAD_ST = ['NOT ORDERED', 'ORDERED', 'WAITING', 'CHECK', 'DELIVERED'];
 async function leadWrite(fn) {
   const raw = await rpcOp('read', {path: 'boards/leadtime/items.json'}); const j = raw ? JSON.parse(raw) : {docs: {}};
@@ -810,16 +811,21 @@ V.construction_leadtime = async () => {
   const late = open.filter(x => x.eta && x.eta < t);
   const cnt = s => open.filter(x => x.status === s).length;
   let h = `<div class="kpis">${kpi(cnt('NOT ORDERED'), 'Not ordered', cnt('NOT ORDERED') ? 'bad' : '')}${kpi(cnt('WAITING') + cnt('ORDERED'), 'On order')}${kpi(cnt('CHECK'), 'Check', cnt('CHECK') ? 'hot' : '')}${kpi(late.length, 'Past ETA', late.length ? 'bad' : '')}</div>`;
-  h += `<div class="seg">${[['open', 'Open'], ['NOT ORDERED', 'Not ordered'], ['WAITING', 'On order'], ['CHECK', 'Check'], ['DELIVERED', 'Delivered'], ['pos', 'BuildOps POs'], ['add', '+ Add']].map(([k, n]) => `<button class="${f === k ? 'on' : ''}" onclick="OMNI.leadView('${k}')">${n}</button>`).join('')}</div>`;
+  h += `<div class="seg">${[['open', 'Open'], ['NOT ORDERED', 'Not ordered'], ['WAITING', 'On order'], ['CHECK', 'Check'], ['DELIVERED', 'Received'], ['pos', 'BuildOps POs'], ['add', '+ Add']].map(([k, n]) => `<button class="${f === k ? 'on' : ''}" onclick="OMNI.leadView('${k}')">${n}</button>`).join('')}</div>`;
   if (f === 'add') return h + `<div class="card"><div class="form"><label>Item<input id="lItem"></label><label>Job<input id="lJob"></label><label>Vendor<input id="lVen"></label><label>Lead time<input id="lLead" placeholder="e.g. 6-8 weeks"></label><label>ETA<input id="lEta" type="date"></label><label>Status<select id="lSt">${LEAD_ST.map(s => `<option>${s}</option>`).join('')}</select></label><label>Note<input id="lNote"></label></div><div class="acts"><button class="btn pri" onclick="OMNI.leadAdd()">Save</button></div></div>`;
   if (f === 'pos') { let p = null; try { p = await L.leadPOs(); } catch (_) {}
     if (!p) return h + `<div class="card"><div class="s">Open BuildOps POs land here once the PC job "Omni Lead Times" runs (C:\\OmniAgent\\leadtime, daily 6:10 AM, no Claude).</div></div>`;
-    const tracked = new Set(it.map(x => x.po).filter(Boolean));
-    return h + `<div class="muted">From BuildOps ${esc(when(p.updatedAt))} · ${p.items.length} open POs</div>` + p.items.map(x => `<div class="card ${tracked.has(x.po) ? '' : 'flag'}"><div class="row"><div class="t">PO ${esc(x.po)} · ${esc(x.vendor || '')}</div><div class="amt">${x.total ? money(x.total) : ''}</div></div><div class="s">${esc(x.job || '')} · ${esc(x.status || '')} · ${esc(x.date ? day(x.date + 'T12:00:00Z') : '')}${x.needBy ? ' · need by ' + esc(x.needBy) : ''}</div>${x.desc ? `<div class="p muted">${esc(x.desc)}</div>` : ''}${tracked.has(x.po) ? '' : `<div class="acts"><button class="btn" onclick="OMNI.leadTrack('${esc(x.po)}')">Track lead time</button></div>`}</div>`).join(''); }
+    const ov = {}; it.forEach(x => { if (x.po) ov[x.po] = x; });
+    const rows = p.items.map(x => { const o = ov[x.po] || {}; return Object.assign({}, x, {eff: o.eta || x.needBy || '', rec: o.status === 'DELIVERED', oid: o.id || ''}); });
+    const showRec = store.get('poRec', false), list = rows.filter(x => showRec ? x.rec : !x.rec).sort((a, b) => (a.eff || '9').localeCompare(b.eff || '9'));
+    return h + `<div class="muted">From BuildOps ${esc(when(p.updatedAt))} · ${rows.filter(x => !x.rec).length} open · ${rows.filter(x => x.rec).length} marked received <button class="btn" onclick="OMNI.poRec()">${showRec ? 'Show open' : 'Show received'}</button></div>` + list.map(x => {
+      const cls = x.rec ? '' : x.eff && x.eff < t ? 'bad' : !x.eff ? 'flag' : '';
+      return `<div class="card ${cls}"><div class="row"><div class="t">PO ${esc(x.po)} · ${esc(x.vendor || '')}</div><div class="amt">${x.total ? money(x.total) : ''}</div></div><div class="s">${esc(x.job || '')} · ordered ${esc(x.date ? day(x.date + 'T12:00:00Z') : '')}</div><div class="s"><b>${x.rec ? 'Received' : x.eff ? 'Due ' + esc(day(x.eff + 'T12:00:00Z')) + (x.eff < t ? ' (late)' : '') : 'No lead time yet'}</b></div>${x.desc ? `<div class="p muted">${esc(x.desc)}</div>` : ''}
+      <div class="acts">${x.rec ? `<button class="btn" onclick="OMNI.poSet('${esc(x.po)}','status','ORDERED')">Undo received</button>` : `<button class="btn pri" onclick="OMNI.poSet('${esc(x.po)}','status','DELIVERED')">Received</button>${[1, 7, 14, 30].map(n => `<button class="btn" onclick="OMNI.poPush('${esc(x.po)}',${n})">+${n}d</button>`).join('')}<input type="date" value="${esc(x.eff)}" onchange="OMNI.poSet('${esc(x.po)}','eta',this.value)" style="max-width:150px">`}</div></div>`; }).join(''); }
   const show = (f === 'open' ? open : f === 'WAITING' ? it.filter(x => x.status === 'WAITING' || x.status === 'ORDERED') : it.filter(x => x.status === f)).sort((a, b) => (a.eta || '9').localeCompare(b.eta || '9'));
   h += show.map(x => { const cls = x.status === 'DELIVERED' ? '' : x.eta && x.eta < t ? 'bad' : x.status === 'NOT ORDERED' ? 'bad' : x.status === 'CHECK' ? 'flag' : '';
     return `<div class="card ${cls}"><div class="row"><div class="t">${esc(x.item)}</div><div class="s">${esc(x.status)}</div></div><div class="s">${esc(x.job || '')}${x.vendor ? ' · ' + esc(x.vendor) : ''}${x.lead ? ' · ' + esc(x.lead) : ''}</div><div class="s">ETA ${x.eta ? esc(day(x.eta + 'T12:00:00Z')) : esc(x.etaText || 'none')}${x.po ? ' · PO ' + esc(x.po) : ''}</div>${x.note ? `<div class="p muted">${esc(x.note)}</div>` : ''}
-    <div class="acts">${LEAD_ST.filter(s => s !== x.status).map(s => `<button class="btn" onclick="OMNI.leadSet('${x.id}','status','${s}')">${s === 'DELIVERED' ? 'Delivered' : s[0] + s.slice(1).toLowerCase()}</button>`).join('')}<input type="date" value="${esc(x.eta || '')}" onchange="OMNI.leadSet('${x.id}','eta',this.value)" style="max-width:150px"></div></div>`; }).join('') || '<div class="empty">Nothing here.</div>';
+    <div class="acts">${LEAD_ST.filter(s => s !== x.status).map(s => `<button class="btn" onclick="OMNI.leadSet('${x.id}','status','${s}')">${s === 'DELIVERED' ? 'Received' : s[0] + s.slice(1).toLowerCase()}</button>`).join('')}</div>${x.status === 'DELIVERED' ? '' : `<div class="acts">${[1, 7, 14, 30].map(n => `<button class="btn" onclick="OMNI.leadPush('${x.id}',${n})">+${n}d</button>`).join('')}<input type="date" value="${esc(x.eta || '')}" onchange="OMNI.leadSet('${x.id}','eta',this.value)" style="max-width:150px"></div>`}</div>`; }).join('') || '<div class="empty">Nothing here.</div>';
   return h;
 };
 const OMNI_X = {
@@ -846,6 +852,15 @@ const OMNI_X = {
     const rows = d.live.map(l => ({Date: String(l.OrderDate || l.Created || '').slice(0, 10), Name: l.EmployeeName, Department: l.Department, Garment: l.GarmentLabel || l.GarmentType, Color: l.Color, Size: l.Size, Length: l.Length, Quantity: l.Quantity}));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Orders'); XLSX.writeFile(wb, `omni-uniform-orders-${todayYMD()}.xlsx`); },
   leadView(k) { store.set('leadView', k); render(); },
+  poRec() { store.set('poRec', !store.get('poRec', false)); render(); },
+  async poSet(po, k, v) { try { const p = await L.leadPOs(); const x = (p.items || []).find(i => i.po === po) || {po};
+      await leadWrite((d, now) => { let id = Object.keys(d).find(i => d[i].po === po && !d[i]._deleted); if (!id) { id = 'lt-po-' + po; d[id] = {item: x.desc || ('PO ' + po), job: x.job || '', vendor: x.vendor || '', po, eta: x.needBy || '', status: 'ORDERED', source: 'BuildOps PO', addedAt: now}; }
+        d[id][k] = v; if (k === 'status' && v === 'DELIVERED') d[id].receivedAt = now; d[id]._at = now; d[id].by = 'phone'; });
+      toast(k === 'status' ? (v === 'DELIVERED' ? 'Marked received' : 'Back to open') : 'Lead time updated'); render(); } catch (e) { toast(e.message); } },
+  async poPush(po, n) { const j = await L.lead().catch(() => ({docs: {}})); const p = await L.leadPOs(); const x = (p.items || []).find(i => i.po === po) || {};
+    const o = Object.values(j.docs || {}).find(d => d.po === po && !d._deleted) || {}; return OMNI.poSet(po, 'eta', addDays(o.eta || x.needBy, n)); },
+  async leadPush(id, n) { const j = await L.lead(); const x = (j.docs || {})[id] || {}; return OMNI.leadSet(id, 'eta', addDays(x.eta, n)); },
+
   async leadSet(id, k, v) { try { await leadWrite((d, now) => { if (d[id]) { d[id][k] = v; d[id]._at = now; d[id].by = 'phone'; } }); toast('Saved'); render(); } catch (e) { toast(e.message); } },
   async leadAdd() { const v = id => (document.getElementById(id) || {}).value || ''; if (!v('lItem')) return toast('Item is required');
     try { await leadWrite((d, now) => { d['lt-' + Date.now().toString(36)] = {item: v('lItem'), job: v('lJob'), vendor: v('lVen'), lead: v('lLead'), eta: v('lEta'), status: v('lSt'), note: v('lNote'), source: 'phone', addedAt: now, _at: now}; }); store.set('leadView', 'open'); toast('Added'); render(); } catch (e) { toast(e.message); } },
