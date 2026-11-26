@@ -223,10 +223,12 @@ async function qboFromMail() {
   return qboBuild(ar, ap, bs);
 }
 
+
+
 /* ---------------- router ---------------- */
 const TABS = {
-  command: [['today', 'Today'], ['inbox', 'Inbox'], ['drafts', 'Drafts'], ['todo', 'To Do'], ['admin', 'Admin To Do'], ['queue', 'Ask Claude'], ['work', 'Work'], ['systems', 'Systems Review'], ['dash', 'Dashboards'], ['seats', 'Seats']],
-  construction: [['checkins', 'Daily Check-Ins'], ['wrap', 'Wrap-Up'], ['jobs', 'Job Board'], ['thursday', 'Thursday Reports'], ['permits', 'Permits'], ['permitdesk', 'Permit Desk']],
+  command: [['today', 'Today'], ['inbox', 'Inbox'], ['drafts', 'Drafts'], ['todo', 'To Do'], ['admin', 'Mgmt To Do'], ['queue', 'Ask Claude'], ['work', 'Work'], ['systems', 'Systems Review'], ['dash', 'Dashboards'], ['seats', 'Seats']],
+  construction: [['checkins', 'Daily Check-Ins'], ['wrap', 'Wrap-Up'], ['jobs', 'Job Board'], ['thursday', 'Thursday Reports'], ['leadtime', 'Lead Times'], ['permits', 'Permits'], ['permitdesk', 'Permit Desk']],
   sales: [['due', 'Bids due'], ['followups', 'Follow-ups'], ['submitted', 'Submitted'], ['hold', 'On hold'], ['kit', 'Tools'], ['bidboard', 'Bid Board']],
   finance: [['cash', 'Cash · A/R · A/P'], ['plan', '2027 Plan'], ['pl', 'P&L by dept'], ['score', 'Scorecard'], ['paymix', 'Payment mix'], ['tools', 'Tool Accounts']],
   marketing: [['content', 'Content'], ['site', 'Site health'], ['standout', 'How We Stand Out'], ['uniforms', 'Uniforms'], ['reviews', 'Reviews']]
@@ -291,15 +293,6 @@ V.command_todo = async () => {
   const pick = store.get('todoList', main && main.id);
   const list = lists.find(l => l.id === pick) || main;
   return todoView(list, lists, 'todoList');
-};
-V.command_admin = async () => {
-  const cfg = store.get('admin', null);
-  const lists = (await L.lists().catch(() => ({value: []}))).value || [];
-  if (cfg && cfg.type === 'todo') { const l = lists.find(x => x.id === cfg.id); if (l) return todoView(l, lists, null, true); }
-  if (cfg && cfg.type === 'link') return `<h2>Admin To Do</h2><div class="card"><div class="t">${esc(cfg.name || 'Admin To Do')}</div><div class="s">${esc(cfg.url)}</div><div class="acts"><a class="btn pri" href="${esc(cfg.url)}" target="_blank" rel="noopener">Open</a><button class="btn" onclick="OMNI.adminReset()">Change</button></div></div>`;
-  return `<h2>Admin To Do<small>set once</small></h2><div class="card"><div class="t">Which list is it?</div><div class="s">Pick the To Do list, or paste the link of the app you saved from Chrome.</div>
-  <div class="p">${lists.map(l => `<button class="btn" style="margin:4px 4px 0 0" onclick="OMNI.adminSet('todo','${l.id}')">${esc(l.displayName)}</button>`).join('')}</div>
-  <div class="addrow" style="margin-top:12px"><input id="adminUrl" placeholder="https://… (app link)"><button class="btn pri" onclick="OMNI.adminSet('link',document.getElementById('adminUrl').value)">Save</button></div></div>`;
 };
 async function todoView(list, lists, pickKey, isAdmin) {
   if (!list) return '<div class="empty">No To Do lists found.</div>';
@@ -505,19 +498,6 @@ V.marketing_site = async () => {
   if ((s.blocked || []).length) h += '<h2>Blocked</h2>' + s.blocked.map(f => `<div class="card"><div class="p">${esc(f)}</div></div>`).join('');
   return h;
 };
-V.marketing_uniforms = async () => {
-  let orders = null; try { orders = await L.uniforms(); } catch (_) {}
-  const reps = await L.uniformReports().catch(() => ({}));
-  const lines = orders ? (Array.isArray(orders) ? orders : orders.lines || Object.values(orders.docs || {})) : [];
-  const open = lines.filter(l => !/ordered|delivered|done|cancel/i.test(l.status || ''));
-  let h = `<div class="kpis">${kpi(orders ? lines.length : '–', 'Order lines')}${kpi(orders ? open.length : '–', 'Not ordered yet', open.length ? 'hot' : '')}${kpi(orders ? money(lines.reduce((s, l) => s + num(l.price) * (num(l.qty) || 1), 0)) : '–', 'Order value')}${kpi(orders ? new Set(lines.map(l => l.employee || l.name)).size : '–', 'People')}</div>
-  <div class="acts"><a class="btn pri" href="${C.links.uniformApp}" target="_blank" rel="noopener">Open uniform order app</a></div>`;
-  if (!orders) h += `<div class="card"><div class="s">Orders live inside the uniform app. They show here once the app saves a copy to SharePoint (boards/marketing/uniform/orders.json).</div></div>`;
-  else h += '<h2>Open orders</h2>' + (open.map(l => `<div class="card"><div class="row"><div class="t">${esc(l.employee || l.name)}</div><div class="amt">${esc(l.qty || 1)} × ${esc(l.item || l.garment || l.key)}</div></div><div class="s">${esc(l.size || '')} ${esc(l.dept || l.department || '')} · ${esc(when(l.submittedAt))}</div></div>`).join('') || '<div class="empty">Nothing open.</div>');
-  const rs = (reps.value || reps || []).filter ? (reps.value || reps) : [];
-  h += '<h2>Uniform reports</h2>' + ((Array.isArray(rs) ? rs : []).slice(0, 8).map(m => `<div class="card"><div class="row"><div class="t">${esc(m.subject)}</div><div class="s">${esc(day(m.receivedDateTime))}</div></div><div class="acts">${m.hasAttachments ? `<button class="btn pri" onclick="OMNI.report('${m.id}')">Open report</button>` : ''}<a class="btn" href="${esc(m.webLink)}" target="_blank" rel="noopener">Email</a></div></div>`).join('') || '<div class="empty">No uniform report emails found.</div>');
-  return h;
-};
 V.marketing_reviews = async () => {
   let d; try { d = await L.reviews(); } catch (e) { return `<div class="card"><div class="t">No review file yet</div><div class="s">Reviews show here from Claude outputs/boards/marketing/reviews.json.</div></div>`; } const rs = Array.isArray(d) ? d : d.reviews || Object.values(d.docs || d.items || {});
   const toDo = rs.filter(r => !r.replied && !r.reply && !/answered|replied|done/i.test(r.status || ''));
@@ -710,7 +690,7 @@ V.command_systems = async () => {
     + all.filter(f => !/done|skipped/.test(f.status)).map(card).join('') + '<h2>Done / skipped</h2>' + all.filter(f => /done|skipped/.test(f.status)).slice(0, 30).map(card).join('');
 };
 const DASHES = {
-  'Construction': [['Job Board', 'UREWSNqroZwEJbZ3bQengX', 'Weekly job board, KPIs, Review tab'], ['Omni Lead-Time Log', '9byfp1ihp7yxbHtoYkZuTm', 'Equipment lead times'], ['The Monroe Hub', 'GvQsbD6iJ3iuJ6SdHvNZBY', 'Monroe job hub'], ['Construction Wrap-Up (page)', 'AqGuDhSzWcWfodSUXTNTSh', 'Older wrap-up page']],
+  'Construction': [['Job Board', 'UREWSNqroZwEJbZ3bQengX', 'Weekly job board, KPIs, Review tab'], ['Omni Lead-Time Log (old doc)', '9byfp1ihp7yxbHtoYkZuTm', 'Frozen 10/9; live log is Construction > Lead Times'], ['The Monroe Hub', 'GvQsbD6iJ3iuJ6SdHvNZBY', 'Monroe job hub'], ['Construction Wrap-Up (page)', 'AqGuDhSzWcWfodSUXTNTSh', 'Older wrap-up page']],
   'Sales & Bidding': [['Proposal Engine', '1KjFibJnA9wChDTxSX54yH', 'Bid board, CRM queue, filing, catalog, rebates'], ['Plumbing Pricer', 'F2yNKJeEM4fGZTYRMB97YK', 'Sub price range'], ['Duct Pricer', 'R5LuNWXNvoAP7k975G6nhC', 'QuickTin-based duct cost'], ['Electrical Pricer', 'BzzNWWVARUM3rtn9D1JLTm', 'Apex-based electrical cost']],
   'Finance': [['Omni Department Scorecard', 'Ufoo4dhbbBEGJ3VsNspyuv', 'Department metrics'], ['2027 Revenue Plan', '5CBBdBHQT3muxTCpXd5dho', 'Plan sheet'], ['2027 Business Plan', '772hxWaJn6mjoW3CaFSzEV', 'Plan doc']],
   'Other': [['Desktop Command Center', 'Ni1J4DsD6J2it5XdBC1Epi', 'Full board on claude.ai'], ['Uniform Order', 'DmjEGWzYQApfNVmiU3Tfws', 'Uniform ordering'], ['BuildOps Entry Desk', 'NHGSPaFamtjWMqRdbTVNMf', 'Job/project setup queue'], ['QBO Change Log', 'VdFfd5pLWTSE6Zhc9xB7X7', 'QuickBooks change batches']]
@@ -744,6 +724,169 @@ V.command_seats = async () => {
 };
 
 /* ---------------- actions ---------------- */
+/* ---------- Uniforms: SharePoint lists "Uniform Order Lines" (current quarter) + "Uniform Order Lines Archive" on /sites/OmniMech ---------- */
+const UNI = {
+  site: 'omnimechusa.sharepoint.com:/sites/OmniMech', live: 'Uniform Order Lines', arch: 'Uniform Order Lines Archive',
+  emps: ['Jack Tacchi', 'Josh Beggs', 'Paul Lutsch', 'Kaydin Johnson', 'Jeffrey Randall', 'Quentin Harding', 'Roland Gobel', 'Christopher Hook', 'Dillon Willhoite', 'Brian Johnson', 'Parker Rowand', 'Thomas Mitchell', 'Lucas Barker', 'Tim', 'Darian'],
+  sizes: ['S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'],
+  field: d => d === 'Service' || d === 'Install',
+  meta(k, d) { const f = UNI.field(d);
+    return ({
+      tee: f ? ['Tee Shirt', 'Hi-Vis', '8300 Gildan DryBlend Pocket Tee'] : ['Tee Shirt', 'Black', 'Gildan 2000 Short Sleeve Tee'],
+      longSleeve: f ? ['Long Sleeve', 'Hi-Vis', 'Hi-Vis Long Sleeve Tee'] : ['Long Sleeve', 'Black', 'Gildan 2000 Long Sleeve Tee'],
+      sweatshirt: ['Sweatshirt', 'Black', '18500 Gildan Heavy Blend Hoodie' + (f ? ', Field Art' : ', Office Art')],
+      jacket: ['Jacket', 'Black', 'Carhartt Storm Defender Shoreline Jacket'],
+      hiVisJacket: ['Hi-Vis Jacket', 'Safety Green', 'Port Authority Enhanced Visibility Challenger Jacket'],
+      ballCap: ['Ball Cap', 'Charcoal / Kelly Green', '112 Trucker Cap'],
+      beanie: ['Beanie', 'Black', 'Omni Beanie'],
+      teeHiVis: ['Tee Shirt', 'Hi-Vis', '8300 Gildan DryBlend Pocket Tee, office allowance'],
+      lsHiVis: ['Long Sleeve', 'Hi-Vis', 'Hi-Vis Long Sleeve Tee, office allowance']})[k]; },
+  keys: d => ['tee', 'longSleeve', 'sweatshirt', 'jacket'].concat(UNI.field(d) ? ['hiVisJacket'] : []).concat(['ballCap', 'beanie']).concat(d === 'Office' ? ['teeHiVis', 'lsHiVis'] : []),
+  sized: k => !/ballCap|beanie/.test(k), long: k => /tee|longSleeve|sweatshirt|teeHiVis|lsHiVis/.test(k),
+  caps: [{label: 'jackets', max: 2, test: l => /jacket/i.test(l.GarmentType)}, {label: 'office hi-vis tees', max: 2, test: l => l.Department === 'Office' && /tee shirt/i.test(l.GarmentType) && /hi-vis/i.test(l.Color)}, {label: 'office hi-vis long sleeves', max: 2, test: l => l.Department === 'Office' && /long sleeve/i.test(l.GarmentType) && /hi-vis/i.test(l.Color)}],
+  cart: []
+};
+L.uniSite = () => data('uniSite', () => g(`/sites/${UNI.site}?$select=id`), 1440);
+L.uniLines = () => data('uniLines', async () => {
+  const s = await L.uniSite(); const get = async t => { let u = `/sites/${s.id}/lists/${encodeURIComponent(t)}/items?$expand=fields&$top=500`, out = [];
+    while (u) { const r = await g(u.replace(GRAPH, '')); out = out.concat((r.value || []).map(x => Object.assign({_id: x.id, _list: t}, x.fields))); u = r['@odata.nextLink'] || ''; } return out; };
+  const [live, arch] = await Promise.all([get(UNI.live), get(UNI.arch).catch(() => [])]);
+  return {live, arch};
+}, 15);
+const uniYear = l => String(l.OrderDate || l.Created || '').slice(0, 4);
+V.marketing_uniforms = async () => {
+  const sub = store.get('uniView', 'orders');
+  const seg = `<div class="seg">${[['orders', 'This quarter'], ['buy', 'Buy list'], ['people', 'People'], ['new', 'New order'], ['reports', 'Reports']].map(([k, n]) => `<button class="${sub === k ? 'on' : ''}" onclick="OMNI.uniView('${k}')">${n}</button>`).join('')}</div>`;
+  let d; try { d = await L.uniLines(); } catch (e) { return seg + `<div class="card bad"><div class="t">Can't read the uniform lists</div><div class="s">${esc(e.message)}</div></div>`; }
+  const live = d.live.filter(l => !/test/i.test(l.EmployeeName || '')), all = live.concat(d.arch), yr = String(new Date().getFullYear());
+  const qty = a => a.reduce((s, l) => s + (num(l.Quantity) || 1), 0);
+  let h = `<div class="kpis">${kpi(qty(live), 'Pieces this quarter', live.length ? 'hot' : '')}${kpi(new Set(live.map(l => l.EmployeeName)).size, 'People ordering')}${kpi(qty(all.filter(l => uniYear(l) === yr)), 'Pieces this year')}${kpi(d.arch.length, 'Archived lines')}</div>` + seg;
+  if (sub === 'orders') {
+    const by = {}; live.forEach(l => (by[l.EmployeeName] = by[l.EmployeeName] || []).push(l));
+    h += Object.keys(by).sort().map(n => `<div class="card"><div class="row"><div class="t">${esc(n)}</div><div class="s">${esc(by[n][0].Department || '')}</div></div>${by[n].map(l => `<div class="s">${esc(l.Quantity)} × ${esc(l.GarmentType)} · ${esc(l.Color)} · ${esc(l.Size)}${l.Length && l.Length !== 'Standard' ? ' ' + esc(l.Length) : ''} <span class="muted">${esc(day(l.OrderDate || l.Created))}</span></div>`).join('')}</div>`).join('') || '<div class="empty">No orders this quarter.</div>';
+    if (d.live.length !== live.length) h += `<div class="muted">${d.live.length - live.length} test line(s) hidden.</div>`;
+  } else if (sub === 'buy') {
+    const t = {}; live.forEach(l => { const k = [l.GarmentLabel || l.GarmentType, l.Size, l.Length || 'Standard'].join('|'); t[k] = (t[k] || 0) + (num(l.Quantity) || 1); });
+    const rows = Object.entries(t).sort();
+    h += `<div class="acts"><button class="btn pri" onclick="OMNI.uniExport()">Download Excel</button></div><h2>What to order from the vendor</h2>` + (rows.map(([k, q]) => { const [g1, s, len] = k.split('|'); return `<div class="card"><div class="row"><div class="t">${esc(g1)}</div><div class="amt">${q}</div></div><div class="s">Size ${esc(s)}${len !== 'Standard' ? ' · ' + esc(len) : ''}</div></div>`; }).join('') || '<div class="empty">Nothing to order.</div>');
+  } else if (sub === 'people') {
+    const ppl = [...new Set(all.filter(l => uniYear(l) === yr).map(l => l.EmployeeName))].filter(n => n && !/test/i.test(n)).sort();
+    h += '<h2>Annual allowances (' + yr + ')</h2>' + ppl.map(n => { const mine = all.filter(l => l.EmployeeName === n && uniYear(l) === yr);
+      return `<div class="card"><div class="row"><div class="t">${esc(n)}</div><div class="amt">${qty(mine)} pcs</div></div><div class="s">${UNI.caps.map(c => { const u = qty(mine.filter(c.test)); return u ? `${u}/${c.max} ${c.label}${u >= c.max ? ' (maxed)' : ''}` : ''; }).filter(Boolean).join(' · ') || 'No capped items yet'}</div></div>`; }).join('') || '<div class="empty">No orders this year.</div>';
+  } else if (sub === 'new') {
+    const f = store.get('uniForm', {name: '', dept: 'Install', key: 'tee', size: 'L', len: 'Standard', qty: 1});
+    const opt = (a, v) => a.map(x => `<option ${x === v ? 'selected' : ''}>${esc(x)}</option>`).join('');
+    const keys = UNI.keys(f.dept); if (!keys.includes(f.key)) f.key = keys[0];
+    h += `<div class="card"><div class="t">Order for an employee</div><div class="s">Writes straight to the "Uniform Order Lines" list, so the quarterly report picks it up.</div>
+    <div class="form"><label>Name<select id="uName" onchange="OMNI.uniForm('name',this.value)"><option value="">Pick a name</option>${opt(UNI.emps, f.name)}</select></label>
+    <label>Department<select onchange="OMNI.uniForm('dept',this.value)">${opt(['Office', 'Service', 'Install'], f.dept)}</select></label>
+    <label>Garment<select onchange="OMNI.uniForm('key',this.value)">${keys.map(k => `<option value="${k}" ${k === f.key ? 'selected' : ''}>${esc(UNI.meta(k, f.dept)[0])} (${esc(UNI.meta(k, f.dept)[1])})</option>`).join('')}</select></label>
+    ${UNI.sized(f.key) ? `<label>Size<select onchange="OMNI.uniForm('size',this.value)">${opt(UNI.sizes, f.size)}</select></label>` : ''}
+    ${UNI.long(f.key) ? `<label>Length<select onchange="OMNI.uniForm('len',this.value)">${opt(['Standard', 'Tall'], f.len)}</select></label>` : ''}
+    <label>Quantity<select onchange="OMNI.uniForm('qty',+this.value)">${opt(['1', '2'], String(f.qty))}</select></label></div>
+    <div class="acts"><button class="btn" onclick="OMNI.uniAdd()">Add to order</button></div></div>`;
+    if (UNI.cart.length) h += `<h2>This order</h2>` + UNI.cart.map((c, i) => `<div class="card"><div class="row"><div class="t">${esc(c.qty)} × ${esc(c.type)} · ${esc(c.color)} · ${esc(c.size)}</div><button class="btn" onclick="OMNI.uniDrop(${i})">Remove</button></div><div class="s">${esc(c.name)} · ${esc(c.dept)}</div></div>`).join('') + `<div class="acts"><button class="btn pri" onclick="OMNI.uniSubmit()">Submit ${UNI.cart.length} line(s)</button></div>`;
+  } else {
+    const reps = await L.uniformReports().catch(() => ({})); const rs = reps.value || [];
+    h += `<div class="card"><div class="s">The "Quarterly Uniform Order Report" Power Automate flow emails admin@ each quarter from these same lists.</div></div>` + (rs.slice(0, 8).map(m => `<div class="card"><div class="row"><div class="t">${esc(m.subject)}</div><div class="s">${esc(day(m.receivedDateTime))}</div></div><div class="acts">${m.hasAttachments ? `<button class="btn pri" onclick="OMNI.report('${m.id}')">Open report</button>` : ''}<a class="btn" href="${esc(m.webLink)}" target="_blank" rel="noopener">Email</a></div></div>`).join('') || '<div class="empty">No uniform report emails in your mailbox.</div>');
+  }
+  return h;
+};
+
+/* ---------- Lead-Time Log: SharePoint boards/leadtime/items.json (team edits) + pos.json (PC script, open BuildOps POs) ---------- */
+L.lead = () => data('lead', () => spJSON(board('leadtime/items.json')), 5);
+L.leadPOs = () => data('leadPOs', () => spJSON(board('leadtime/pos.json')), 60);
+const LEAD_ST = ['NOT ORDERED', 'ORDERED', 'WAITING', 'CHECK', 'DELIVERED'];
+async function leadWrite(fn) {
+  const raw = await rpcOp('read', {path: 'boards/leadtime/items.json'}); const j = raw ? JSON.parse(raw) : {docs: {}};
+  const now = new Date().toISOString(); fn(j.docs, now); j.updatedAt = now;
+  await rpcOp('write', {path: 'boards/leadtime/items.json', content: JSON.stringify(j, null, 1)}); delete mem.lead;
+}
+V.construction_leadtime = async () => {
+  const f = store.get('leadView', 'open');
+  let j = {docs: {}}; try { j = await L.lead(); } catch (_) {}
+  const it = Object.entries(j.docs || {}).filter(([, x]) => !x._deleted).map(([id, x]) => Object.assign({id}, x));
+  const open = it.filter(x => x.status !== 'DELIVERED'), t = todayYMD();
+  const late = open.filter(x => x.eta && x.eta < t);
+  const cnt = s => open.filter(x => x.status === s).length;
+  let h = `<div class="kpis">${kpi(cnt('NOT ORDERED'), 'Not ordered', cnt('NOT ORDERED') ? 'bad' : '')}${kpi(cnt('WAITING') + cnt('ORDERED'), 'On order')}${kpi(cnt('CHECK'), 'Check', cnt('CHECK') ? 'hot' : '')}${kpi(late.length, 'Past ETA', late.length ? 'bad' : '')}</div>`;
+  h += `<div class="seg">${[['open', 'Open'], ['NOT ORDERED', 'Not ordered'], ['WAITING', 'On order'], ['CHECK', 'Check'], ['DELIVERED', 'Delivered'], ['pos', 'BuildOps POs'], ['add', '+ Add']].map(([k, n]) => `<button class="${f === k ? 'on' : ''}" onclick="OMNI.leadView('${k}')">${n}</button>`).join('')}</div>`;
+  if (f === 'add') return h + `<div class="card"><div class="form"><label>Item<input id="lItem"></label><label>Job<input id="lJob"></label><label>Vendor<input id="lVen"></label><label>Lead time<input id="lLead" placeholder="e.g. 6-8 weeks"></label><label>ETA<input id="lEta" type="date"></label><label>Status<select id="lSt">${LEAD_ST.map(s => `<option>${s}</option>`).join('')}</select></label><label>Note<input id="lNote"></label></div><div class="acts"><button class="btn pri" onclick="OMNI.leadAdd()">Save</button></div></div>`;
+  if (f === 'pos') { let p = null; try { p = await L.leadPOs(); } catch (_) {}
+    if (!p) return h + `<div class="card"><div class="s">Open BuildOps POs land here once the PC job "Omni Lead Times" runs (C:\\OmniAgent\\leadtime, daily 6:10 AM, no Claude).</div></div>`;
+    const tracked = new Set(it.map(x => x.po).filter(Boolean));
+    return h + `<div class="muted">From BuildOps ${esc(when(p.updatedAt))} · ${p.items.length} open POs</div>` + p.items.map(x => `<div class="card ${tracked.has(x.po) ? '' : 'flag'}"><div class="row"><div class="t">PO ${esc(x.po)} · ${esc(x.vendor || '')}</div><div class="amt">${x.total ? money(x.total) : ''}</div></div><div class="s">${esc(x.job || '')} · ${esc(x.status || '')} · ${esc(x.date ? day(x.date + 'T12:00:00Z') : '')}${x.needBy ? ' · need by ' + esc(x.needBy) : ''}</div>${x.desc ? `<div class="p muted">${esc(x.desc)}</div>` : ''}${tracked.has(x.po) ? '' : `<div class="acts"><button class="btn" onclick="OMNI.leadTrack('${esc(x.po)}')">Track lead time</button></div>`}</div>`).join(''); }
+  const show = (f === 'open' ? open : f === 'WAITING' ? it.filter(x => x.status === 'WAITING' || x.status === 'ORDERED') : it.filter(x => x.status === f)).sort((a, b) => (a.eta || '9').localeCompare(b.eta || '9'));
+  h += show.map(x => { const cls = x.status === 'DELIVERED' ? '' : x.eta && x.eta < t ? 'bad' : x.status === 'NOT ORDERED' ? 'bad' : x.status === 'CHECK' ? 'flag' : '';
+    return `<div class="card ${cls}"><div class="row"><div class="t">${esc(x.item)}</div><div class="s">${esc(x.status)}</div></div><div class="s">${esc(x.job || '')}${x.vendor ? ' · ' + esc(x.vendor) : ''}${x.lead ? ' · ' + esc(x.lead) : ''}</div><div class="s">ETA ${x.eta ? esc(day(x.eta + 'T12:00:00Z')) : esc(x.etaText || 'none')}${x.po ? ' · PO ' + esc(x.po) : ''}</div>${x.note ? `<div class="p muted">${esc(x.note)}</div>` : ''}
+    <div class="acts">${LEAD_ST.filter(s => s !== x.status).map(s => `<button class="btn" onclick="OMNI.leadSet('${x.id}','status','${s}')">${s === 'DELIVERED' ? 'Delivered' : s[0] + s.slice(1).toLowerCase()}</button>`).join('')}<input type="date" value="${esc(x.eta || '')}" onchange="OMNI.leadSet('${x.id}','eta',this.value)" style="max-width:150px"></div></div>`; }).join('') || '<div class="empty">Nothing here.</div>';
+  return h;
+};
+const OMNI_X = {
+  uniView(k) { store.set('uniView', k); render(); },
+  uniForm(k, v) { const f = store.get('uniForm', {name: '', dept: 'Install', key: 'tee', size: 'L', len: 'Standard', qty: 1}); f[k] = v; store.set('uniForm', f); render(); },
+  async uniAdd() {
+    const f = store.get('uniForm', {name: '', dept: 'Install', key: 'tee', size: 'L', len: 'Standard', qty: 1}); if (!f.name) return toast('Pick a name first');
+    const [type, color, product] = UNI.meta(f.key, f.dept); const line = {name: f.name, dept: f.dept, type, color, product, size: UNI.sized(f.key) ? f.size : 'OSFM', len: UNI.long(f.key) ? f.len : 'Standard', qty: +f.qty || 1};
+    const d = await L.uniLines().catch(() => ({live: [], arch: []})); const yr = String(new Date().getFullYear());
+    const lf = {EmployeeName: f.name, Department: f.dept, GarmentType: type, Color: color};
+    for (const c of UNI.caps) if (c.test(lf)) { const used = d.live.concat(d.arch).filter(l => l.EmployeeName === f.name && uniYear(l) === yr && c.test(l)).reduce((s, l) => s + (num(l.Quantity) || 1), 0) + UNI.cart.filter(x => x.name === f.name && c.test({EmployeeName: x.name, Department: x.dept, GarmentType: x.type, Color: x.color})).reduce((s, x) => s + x.qty, 0);
+      if (used + line.qty > c.max) return toast(`${f.name} has ${used} of ${c.max} ${c.label} this year`); }
+    UNI.cart.push(line); render();
+  },
+  uniDrop(i) { UNI.cart.splice(i, 1); render(); },
+  async uniSubmit() {
+    try { const s = await L.uniSite(); const day0 = todayYMD() + 'T12:00:00Z';
+      for (const c of UNI.cart) { const label = `${c.type} - ${c.color} (${c.product})`;
+        await gw(`/sites/${s.id}/lists/${encodeURIComponent(UNI.live)}/items`, {body: {fields: {Title: `${c.name} - ${label}`, EmployeeName: c.name, Department: c.dept, GarmentType: c.type, GarmentLabel: label, Color: c.color, Size: c.size, Length: c.len, Quantity: c.qty, OrderDate: day0}}}, ['Sites.ReadWrite.All'], 'Placing uniform orders'); }
+      toast(`Saved ${UNI.cart.length} line(s)`); UNI.cart = []; delete mem.uniLines; store.set('uniView', 'orders'); render();
+    } catch (e) { toast(e.message); }
+  },
+  async uniExport() { await loadXlsx(); const d = await L.uniLines();
+    const rows = d.live.map(l => ({Date: String(l.OrderDate || l.Created || '').slice(0, 10), Name: l.EmployeeName, Department: l.Department, Garment: l.GarmentLabel || l.GarmentType, Color: l.Color, Size: l.Size, Length: l.Length, Quantity: l.Quantity}));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Orders'); XLSX.writeFile(wb, `omni-uniform-orders-${todayYMD()}.xlsx`); },
+  leadView(k) { store.set('leadView', k); render(); },
+  async leadSet(id, k, v) { try { await leadWrite((d, now) => { if (d[id]) { d[id][k] = v; d[id]._at = now; d[id].by = 'phone'; } }); toast('Saved'); render(); } catch (e) { toast(e.message); } },
+  async leadAdd() { const v = id => (document.getElementById(id) || {}).value || ''; if (!v('lItem')) return toast('Item is required');
+    try { await leadWrite((d, now) => { d['lt-' + Date.now().toString(36)] = {item: v('lItem'), job: v('lJob'), vendor: v('lVen'), lead: v('lLead'), eta: v('lEta'), status: v('lSt'), note: v('lNote'), source: 'phone', addedAt: now, _at: now}; }); store.set('leadView', 'open'); toast('Added'); render(); } catch (e) { toast(e.message); } },
+  async leadTrack(po) { const p = await L.leadPOs(); const x = (p.items || []).find(i => i.po === po); if (!x) return;
+    try { await leadWrite((d, now) => { d['lt-po-' + po] = {item: x.desc || ('PO ' + po), job: x.job || '', vendor: x.vendor || '', po, eta: x.needBy || '', status: 'ORDERED', source: 'BuildOps PO', addedAt: now, _at: now}; }); toast('Tracking PO ' + po); render(); } catch (e) { toast(e.message); } }
+};
+
+/* ---------- Admin To Do = Microsoft List "Management To Do's" (Joyce's OneDrive list, installed as a Chrome app on Tom's PC) ---------- */
+const MGMT = {site: 'omnimechusa-my.sharepoint.com:/personal/joyce_aguilar_omnimechusa_com', list: 'e2570a0f-edd4-449b-8e33-70c2a6c4c0fc',
+  web: 'https://omnimechusa-my.sharepoint.com/personal/joyce_aguilar_omnimechusa_com/Lists/Management%20To%20Dos/AllItems.aspx'};
+L.mgmtSite = () => data('mgmtSite', () => g(`/sites/${MGMT.site}?$select=id`), 1440);
+L.mgmt = () => data('mgmt', async () => { const s = await L.mgmtSite();
+  const r = await g(`/sites/${s.id}/lists/${MGMT.list}/items?$expand=fields&$top=500`);
+  const items = (r.value || []).map(x => Object.assign({_id: x.id}, x.fields));
+  const ids = [...new Set(items.map(x => x.Assignedto0LookupId).filter(Boolean))], names = {};
+  await Promise.all(ids.map(async i => { try { const u = await g(`/sites/${s.id}/lists/User%20Information%20List/items/${i}?$expand=fields($select=Title)`); names[i] = u.fields.Title; } catch (_) {} }));
+  items.forEach(x => x._who = names[x.Assignedto0LookupId] || ''); return items; }, 5);
+V.command_admin = async () => {
+  const f = store.get('mgmtView', 'open'); let items;
+  try { items = await L.mgmt(); } catch (e) { return `<h2>Management To Do's</h2><div class="card bad"><div class="s">${esc(e.message)}</div><div class="acts"><a class="btn pri" href="${MGMT.web}" target="_blank" rel="noopener">Open the list</a></div></div>`; }
+  const done = x => /completed|duplicate|by design|won't fix/i.test(x.Status || ''), t = todayYMD();
+  const open = items.filter(x => !done(x)), od = open.filter(x => x.DueDate && x.DueDate.slice(0, 10) < t);
+  const pr = {Critical: 0, High: 1, Normal: 2, Low: 3};
+  let h = `<h2>Management To Do's<small>Joyce's list</small></h2><div class="kpis">${kpi(open.length, 'Open')}${kpi(od.length, 'Overdue', od.length ? 'bad' : '')}${kpi(open.filter(x => x.Priority === 'Critical').length, 'Critical', 'hot')}${kpi(open.filter(x => x.Status === 'Blocked').length, 'Blocked')}</div>`;
+  h += `<div class="seg">${[['open', 'Open'], ['mine', 'Mine'], ['done', 'Done'], ['add', '+ Add']].map(([k, n]) => `<button class="${f === k ? 'on' : ''}" onclick="OMNI.mgmtView('${k}')">${n}</button>`).join('')}<a class="btn" style="margin-left:auto" href="${MGMT.web}" target="_blank" rel="noopener">Open list</a></div>`;
+  if (f === 'add') return h + `<div class="card"><div class="form"><label>Task<input id="mT"></label><label>Priority<select id="mP"><option>Normal</option><option>High</option><option>Critical</option><option>Low</option></select></label><label>Due<input id="mD" type="date" value="${t}"></label><label>Description<input id="mN"></label></div><div class="acts"><button class="btn pri" onclick="OMNI.mgmtAdd()">Add</button></div></div>`;
+  const me = (store.get('me', {}) || {}).displayName || 'Tom';
+  const show = (f === 'done' ? items.filter(done) : f === 'mine' ? open.filter(x => /tom|thomas/i.test(x._who)) : open)
+    .sort((a, b) => f === 'done' ? String(b.Modified).localeCompare(String(a.Modified)) : ((pr[a.Priority] ?? 2) - (pr[b.Priority] ?? 2)) || String(a.DueDate || '9').localeCompare(String(b.DueDate || '9'))).slice(0, f === 'done' ? 25 : 200);
+  h += show.map(x => { const due = x.DueDate ? x.DueDate.slice(0, 10) : ''; const cls = done(x) ? '' : due && due < t ? 'bad' : x.Priority === 'Critical' ? 'flag' : '';
+    return `<div class="card ${cls} todo">${done(x) ? '' : `<button class="check" aria-label="Done" onclick="OMNI.mgmtDone(this,'${x._id}')"></button>`}<div class="grow"><div class="t">${esc(x.Title)}</div><div class="s">${esc(x.Status || '')} · ${esc(x.Priority || 'Normal')}${x._who ? ' · ' + esc(x._who) : ''}${due ? ' · due ' + esc(day(due + 'T12:00:00Z')) : ''}</div>${x.Description ? `<div class="p muted">${esc(String(x.Description).replace(/<[^>]+>/g, ' ').trim().slice(0, 240))}</div>` : ''}</div></div>`; }).join('') || '<div class="empty">All clear.</div>';
+  return h;
+};
+Object.assign(OMNI_X, {
+  mgmtView(k) { store.set('mgmtView', k); render(); },
+  async mgmtDone(el, id) { el.classList.add('on'); try { const s = await L.mgmtSite(); await gw(`/sites/${s.id}/lists/${MGMT.list}/items/${id}/fields`, {method: 'PATCH', body: {Status: 'Completed'}}, ['Sites.ReadWrite.All'], 'Checking off Management To Do\'s'); delete mem.mgmt; toast('Completed'); render(); } catch (e) { el.classList.remove('on'); toast(e.message); } },
+  async mgmtAdd() { const v = id => (document.getElementById(id) || {}).value || ''; if (!v('mT')) return toast('Task is required');
+    try { const s = await L.mgmtSite(); await gw(`/sites/${s.id}/lists/${MGMT.list}/items`, {body: {fields: Object.assign({Title: v('mT'), Priority: v('mP'), Status: 'New', Description: v('mN')}, v('mD') ? {DueDate: v('mD') + 'T12:00:00Z'} : {})}}, ['Sites.ReadWrite.All'], 'Adding to Management To Do\'s');
+      delete mem.mgmt; store.set('mgmtView', 'open'); toast('Added'); render(); } catch (e) { toast(e.message); } }
+});
+
 window.OMNI = {
   go, tool: openTool,
   async seat(action) { try { await queueAdd({kind: 'seat', title: action === 'take over' ? 'Take over: make engineering@ primary' : 'Hand back: make tcm@ primary', text: action, project: 'Org Instructions', projectId: '01a123f3-23f0-74f4-ba0d-6982b034e16d'}); toast('Seat switch queued for Claude'); render(); } catch (e) { toast(e.message); } }, set(k, v) { store.set(k, v); render(); },
@@ -795,6 +938,7 @@ window.OMNI = {
       sheet(h); } catch (e) { sheet(err(e)); } },
   post(id) { const p = OMNI._posts[id] || {}; sheet(`<div class="t" style="font-size:17px;padding-right:30px">${esc(p.title)}</div><div class="s">${esc(p.channel)} · ${esc(p.date)} · ${esc(p.status)}</div>${p.photoUrl ? `<img src="${esc(p.photoUrl)}" style="width:100%;border-radius:10px;margin-top:10px" alt="">` : ''}<div class="p">${esc(p.body || p.text || p.caption || '')}</div>${p.hashtags ? `<div class="s">${esc([].concat(p.hashtags).join(' '))}</div>` : ''}`); }
 };
+Object.assign(window.OMNI, OMNI_X);
 function sanitize(html) {
   const d = new DOMParser().parseFromString(html || '', 'text/html');
   d.querySelectorAll('script,style,iframe,object,embed,link,meta,form').forEach(n => n.remove());

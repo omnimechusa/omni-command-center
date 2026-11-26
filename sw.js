@@ -1,6 +1,6 @@
 // App shell cache only. Data always comes live from Microsoft 365.
-const SHELL = 'omni-cc-v4';
-const FILES = ['./', 'index.html', 'styles.css?v=4', 'config.js?v=4', 'app.js?v=4',
+const SHELL = 'omni-cc-v5';
+const FILES = ['./', 'index.html', 'styles.css?v=5', 'config.js?v=5', 'app.js?v=5',
   'lib/msal-browser.min.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
