@@ -161,7 +161,7 @@ async function readXlsx(buf) { await loadXlsx(); const wb = XLSX.read(buf, {type
 
 /* ---------------- router ---------------- */
 const TABS = {
-  command: [['today', 'Today'], ['todo', 'To Do'], ['admin', 'Admin To Do'], ['inbox', 'Inbox'], ['queue', 'Claude queue']],
+  command: [['today', 'Today'], ['inbox', 'Inbox'], ['drafts', 'Drafts'], ['todo', 'To Do'], ['admin', 'Admin To Do'], ['queue', 'Ask Claude'], ['work', 'Work'], ['systems', 'Systems Review'], ['dash', 'Dashboards']],
   construction: [['checkins', 'Daily Check-Ins'], ['wrap', 'Wrap-Up'], ['jobs', 'Job Board'], ['thursday', 'Thursday Reports'], ['permits', 'Permits'], ['permitdesk', 'Permit Desk']],
   sales: [['due', 'Bids due'], ['followups', 'Follow-ups'], ['submitted', 'Submitted'], ['hold', 'On hold'], ['kit', 'Tools'], ['bidboard', 'Bid Board']],
   finance: [['cash', 'Cash · A/R · A/P'], ['plan', '2027 Plan'], ['pl', 'P&L by dept'], ['score', 'Scorecard'], ['paymix', 'Payment mix'], ['tools', 'Tool Accounts']],
@@ -256,15 +256,6 @@ V.command_inbox = async () => {
     <div class="row"><div class="t">${esc(m.from && m.from.emailAddress ? m.from.emailAddress.name : '')}</div><div class="s">${esc(when(m.receivedDateTime))}</div></div>
     <div class="${m.isRead ? '' : 't'}" style="font-size:14px">${esc(m.subject)}</div><div class="s">${esc((m.bodyPreview || '').slice(0, 140))}</div></div>`).join('');
 };
-V.command_queue = async () => {
-  const q = await L.queue(); const items = Array.isArray(q) ? q : Array.isArray(q.items) ? q.items : q.docs ? Object.entries(q.docs).map(([id, v]) => Object.assign({id}, v)) : [];
-  items.sort((a, b) => String(b.created || b.createdAt || b.at || '').localeCompare(String(a.created || a.createdAt || a.at || '')));
-  const st = s => /done|ok|complete/i.test(s) ? 'g' : /error|fail/i.test(s) ? 'r' : /need|wait|working|new/i.test(s) ? 'y' : '';
-  return `<h2>Claude queue<small>${items.length} items</small></h2>` + (items.slice(0, 60).map(i => `<div class="card"><div class="row"><div class="t">${esc(i.title || i.subject || i.text || i.prompt || i.id)}</div><span class="pill ${st(i.status || '')}">${esc(i.status || '')}</span></div>
-    <div class="s">${esc(when(i.created || i.createdAt || i.at))}${i.project ? ' · ' + esc(i.project) : ''}</div>${i.result || i.note ? `<div class="p muted">${esc(String(i.result || i.note).slice(0, 300))}</div>` : ''}</div>`).join('') || '<div class="empty">Queue is empty.</div>')
-    + `<div class="acts"><a class="btn" href="${C.links.claudeBoard}" target="_blank" rel="noopener">Open full board in Claude</a></div>`;
-};
-
 /* CONSTRUCTION */
 const CHECK_FLAGS = [['Question?', 'Question Detail', 'Question'], ['Needs Materials?', 'Materials Detail', 'Materials'], ['GC & Client Issues?', 'GC & Client Detail', 'GC/Client'], ['Any Holdups?', 'Holdup Detail', 'Holdup'], ['Safety Issues?', 'Safety Details', 'Safety']];
 function parseCheckins(m) {
@@ -586,6 +577,83 @@ V.marketing_standout = async () => {
   return '<div class="card">' + so.map(s => `${s.l <= 1 ? `<h2>${esc(s.h)}</h2>` : `<div class="t" style="margin-top:12px">${esc(s.h)}</div>`}${(s.p || []).map(p => `<div class="p">${esc(p)}</div>`).join('')}`).join('') + '</div>';
 };
 
+/* ---------------- Command extras: queue requests, Drafts, Work, Systems Review, Dashboards ---------------- */
+const MAIL_SCOPES = ['Mail.ReadWrite', 'Mail.Send'];
+async function scopedToken(scopes, what) {
+  try { return (await pca.acquireTokenSilent({scopes, account})).accessToken; }
+  catch (e) { throw new Error(what + ' needs one more Microsoft approval. Ask your Microsoft admin to approve it, then try again.'); }
+}
+async function gw(path, opt, scopes, what) { /* Graph call with a write scope */
+  if (DEMO) return {};
+  const tok = await scopedToken(scopes, what); const h = {Authorization: 'Bearer ' + tok};
+  let body = opt.body; if (body && typeof body !== 'string') { h['Content-Type'] = 'application/json'; body = JSON.stringify(body); } else if (body) h['Content-Type'] = 'text/plain';
+  const r = await fetch(GRAPH + path, {method: opt.method || 'POST', headers: h, body});
+  if (!r.ok && r.status !== 202) { let m = r.status + ''; try { m += ' ' + ((await r.json()).error.message || ''); } catch (_) {} throw new Error(m); }
+  try { return await r.json(); } catch (_) { return {}; }
+}
+const PROJECTS = [['Org Instructions', '01a123f3-23f0-74f4-ba0d-6982b034e16d'], ['Proposal Engine', ''], ['General HVAC or Other Business Advice', ''], ['Reports & KPIs', ''], ['AI Branding/Online Presence Optimization', ''], ['Construction Weekly Wrap-Up', ''], ['BuildOps Entry & Admin', ''], ['Personal Command', '']];
+async function queueWrite(fn) { /* read-modify-write boards/cc/inbox.json */
+  const path = C.paths.boards + '/cc/inbox.json';
+  let j; try { j = safeJSON(await spText(path)); } catch (_) { j = {docs: {}}; }
+  j.docs = j.docs || {}; fn(j.docs); j.updatedAt = new Date().toISOString();
+  await gw(spItem(path) + '/content', {method: 'PUT', body: JSON.stringify(j)}, WRITE_SCOPES, 'Saving');
+  delete mem.queue;
+}
+async function queueAdd(item) {
+  const id = 'i' + Date.now() + Math.random().toString(36).slice(2, 6); const now = new Date().toISOString();
+  await queueWrite(d => { d[id] = Object.assign({kind: 'ask', ref: '', title: '', text: '', status: 'new', createdAt: now, _at: now, from: 'phone app'}, item); });
+  return id;
+}
+V.command_queue = async () => {
+  const q = await L.queue(); const items = Object.entries(q.docs || {}).map(([id, v]) => Object.assign({id}, v)).filter(i => !i._deleted);
+  items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  const st = s => /done/i.test(s) ? 'g' : /error|fail/i.test(s) ? 'r' : /need|working|new/i.test(s) ? 'y' : '';
+  const needs = items.filter(i => /needs you/i.test(i.status || ''));
+  const card = i => `<div class="card ${/needs you/i.test(i.status) ? 'flag' : ''}"><div class="row"><div class="t">${esc(i.title || i.text || i.id)}</div><span class="pill ${st(i.status || '')}">${esc(i.status || '')}</span></div>
+    <div class="s">${esc(when(i.createdAt))}${i.project ? ' · ' + esc(i.project) : ''}${i.kind ? ' · ' + esc(i.kind) : ''}</div>${i.text && i.title ? `<div class="p muted">${esc(String(i.text).slice(0, 300))}</div>` : ''}${i.reply ? `<div class="p">Claude: ${esc(String(i.reply).slice(0, 600))}</div>` : ''}
+    ${/needs you/i.test(i.status) ? `<div class="addrow"><input id="ans_${i.id}" placeholder="Your answer"><button class="btn pri" onclick="OMNI.answer('${i.id}')">Send</button></div>` : ''}
+    ${i.chat ? `<div class="acts"><a class="btn" href="https://claude.ai/chat/${esc(i.chat)}" target="_blank" rel="noopener">Open chat</a></div>` : ''}</div>`;
+  return `<h2>Ask Claude<small>goes to the Command Center queue</small></h2><div class="card"><textarea id="qtext" rows="3" placeholder="What do you need done?"></textarea>
+    <div class="addrow"><select id="qproj">${PROJECTS.map(p => `<option>${esc(p[0])}</option>`).join('')}</select><button class="btn pri" onclick="OMNI.ask()">Queue it</button></div>
+    <div class="muted">The queue runner picks it up on its next run and answers here.</div></div>`
+    + (needs.length ? '<h2>Needs you</h2>' + needs.map(card).join('') : '') + '<h2>Recent</h2>' + (items.filter(i => !needs.includes(i)).slice(0, 40).map(card).join('') || '<div class="empty">Queue is empty.</div>');
+};
+V.command_drafts = async () => {
+  const r = await data('drafts', () => g(`/me/mailFolders/drafts/messages?$top=40&$orderby=lastModifiedDateTime desc&$select=subject,toRecipients,lastModifiedDateTime,bodyPreview,webLink`), 2);
+  const ms = r.value || [];
+  return `<h2>Drafts<small>${ms.length} in Outlook Drafts</small></h2>` + (ms.map(m => `<div class="card"><div class="row"><div class="t">${esc(m.subject || '(no subject)')}</div><div class="s">${esc(when(m.lastModifiedDateTime))}</div></div>
+    <div class="s">To: ${esc((m.toRecipients || []).map(t => t.emailAddress.name || t.emailAddress.address).join(', ') || '–')}</div><div class="p muted">${esc((m.bodyPreview || '').slice(0, 220))}</div>
+    <div class="acts"><button class="btn pri" onclick="OMNI.sendDraft('${m.id}', this)">Send</button><button class="btn" onclick="OMNI.mail('${m.id}')">Read / edit</button><a class="btn" href="${esc(m.webLink)}" target="_blank" rel="noopener">Outlook</a></div></div>`).join('') || '<div class="empty">No drafts.</div>');
+};
+V.command_work = async () => {
+  const d = await data('work', () => spJSON(C.paths.boards + '/cc/work.json'), 10);
+  const items = Object.entries(d.docs || {}).map(([id, v]) => Object.assign({id}, v)).filter(v => !v._deleted && !/archived|done/i.test(v.s || '') && !/nothing( else)? (is )?open|^done|closed out|no action|archive unless|\bdone\b[^.]*\.\s*archive/i.test(v.next || ''));
+  items.forEach(v => { if (!v.n && /^[0-9a-f-]{36}$/.test(v.id)) v.chat = v.chat || v.id; });
+  return `<h2>Work + next steps<small>${items.length} open</small></h2>` + (items.map(v => `<div class="card"><div class="t">${esc(v.n || v.title || (v.next || '').split(/[.;:]/)[0].slice(0, 70) || v.id)}</div><div class="s">${esc(v.p || v.proj || '')}${v.s ? ' · ' + esc(v.s) : ''}</div>${v.next ? `<div class="p">${esc(v.next)}</div>` : ''}
+    ${v.chat || v.chat2 ? `<div class="acts"><a class="btn" href="https://claude.ai/chat/${esc(v.chat2 || v.chat)}" target="_blank" rel="noopener">Open chat</a></div>` : ''}</div>`).join('') || '<div class="empty">Nothing open.</div>');
+};
+V.command_systems = async () => {
+  const d = await data('findings', () => spJSON(C.paths.boards + '/content/findings.json'), 10);
+  const all = Object.entries(d.docs || {}).map(([id, v]) => Object.assign({id}, v)).filter(v => !v._deleted);
+  const order = {new: 0, approved: 1, 'in-progress': 2, done: 3, skipped: 4};
+  all.sort((a, b) => (order[a.status] ?? 5) - (order[b.status] ?? 5));
+  const card = f => `<div class="card ${f.status === 'new' ? 'flag' : f.status === 'done' ? 'good' : ''}"><div class="row"><div class="t">${esc(f.title)}</div><span class="pill">${esc(f.status)}</span></div>
+    <div class="s">${esc(f.area || '')} · ${esc(f.priority || '')} · ${esc(f.effort || '')}</div><div class="p">${esc(f.why || '')}</div>
+    <div class="s">Now: ${esc(f.currentHome || '')}<br>Better: ${esc(f.recommendedHome || '')}</div>${f.needsTom ? `<div class="p muted">Needs you: ${esc(f.needsTom)}</div>` : ''}
+    ${f.status === 'new' ? `<div class="acts"><button class="btn pri" onclick="OMNI.decide('${f.id}','approved')">Approve</button><button class="btn" onclick="OMNI.decide('${f.id}','skipped')">Skip</button></div>` : ''}</div>`;
+  return `<div class="kpis">${kpi(all.filter(f => f.status === 'new').length, 'Waiting on you', 'hot')}${kpi(all.filter(f => /approved|in-progress/.test(f.status)).length, 'Approved / in progress')}${kpi(all.filter(f => f.status === 'done').length, 'Done')}${kpi(all.length, 'Cards')}</div>`
+    + all.filter(f => !/done|skipped/.test(f.status)).map(card).join('') + '<h2>Done / skipped</h2>' + all.filter(f => /done|skipped/.test(f.status)).slice(0, 30).map(card).join('');
+};
+const DASHES = {
+  'Construction': [['Job Board', 'UREWSNqroZwEJbZ3bQengX', 'Weekly job board, KPIs, Review tab'], ['Omni Lead-Time Log', '9byfp1ihp7yxbHtoYkZuTm', 'Equipment lead times'], ['The Monroe Hub', 'GvQsbD6iJ3iuJ6SdHvNZBY', 'Monroe job hub'], ['Construction Wrap-Up (page)', 'AqGuDhSzWcWfodSUXTNTSh', 'Older wrap-up page']],
+  'Sales & Bidding': [['Proposal Engine', '1KjFibJnA9wChDTxSX54yH', 'Bid board, CRM queue, filing, catalog, rebates'], ['Plumbing Pricer', 'F2yNKJeEM4fGZTYRMB97YK', 'Sub price range'], ['Duct Pricer', 'R5LuNWXNvoAP7k975G6nhC', 'QuickTin-based duct cost'], ['Electrical Pricer', 'BzzNWWVARUM3rtn9D1JLTm', 'Apex-based electrical cost']],
+  'Finance': [['Omni Department Scorecard', 'Ufoo4dhbbBEGJ3VsNspyuv', 'Department metrics'], ['2027 Revenue Plan', '5CBBdBHQT3muxTCpXd5dho', 'Plan sheet'], ['2027 Business Plan', '772hxWaJn6mjoW3CaFSzEV', 'Plan doc']],
+  'Other': [['Desktop Command Center', 'Ni1J4DsD6J2it5XdBC1Epi', 'Full board on claude.ai'], ['Uniform Order', 'DmjEGWzYQApfNVmiU3Tfws', 'Uniform ordering'], ['BuildOps Entry Desk', 'NHGSPaFamtjWMqRdbTVNMf', 'Job/project setup queue'], ['QBO Change Log', 'VdFfd5pLWTSE6Zhc9xB7X7', 'QuickBooks change batches']]
+};
+V.command_dash = async () => Object.entries(DASHES).map(([g0, arr]) => `<h2>${esc(g0)}</h2>` + arr.map(([n, id, d]) =>
+  `<a class="card" style="display:block;text-decoration:none;color:inherit" href="https://claude.ai/artifact/${id}" target="_blank" rel="noopener"><div class="row"><div><div class="t">${esc(n)}</div><div class="s">${esc(d)}</div></div><span class="btn">Open ↗</span></div></a>`).join('')).join('')
+  + `<div class="muted">These open in the Claude app.</div>`;
+
 /* ---------------- actions ---------------- */
 window.OMNI = {
   go, tool: openTool, set(k, v) { store.set(k, v); render(); },
@@ -596,9 +664,37 @@ window.OMNI = {
   async addTask(list) { const i = document.getElementById('newTask'); const t = i.value.trim(); if (!t) return; i.value = '';
     try { await g(`/me/todo/lists/${list}/tasks`, {method: 'POST', body: {title: t, dueDateTime: {dateTime: todayYMD() + 'T17:00:00', timeZone: 'Pacific Standard Time'}}}); delete mem['tasks.' + list]; render(); toast('Added'); } catch (e) { toast(e.message); } },
   async mail(id) { sheet('<div class="loading">Opening…</div>');
-    try { const m = await g(`/me/messages/${id}?$select=subject,from,receivedDateTime,body,webLink,toRecipients`);
-      sheet(`<div class="t" style="font-size:17px;padding-right:30px">${esc(m.subject)}</div><div class="s">${esc(m.from && m.from.emailAddress.name)} · ${esc(dfmt(m.receivedDateTime, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}))}</div>
-      <div class="acts"><a class="btn pri" href="${esc(m.webLink)}" target="_blank" rel="noopener">Open in Outlook</a></div><div class="mailbody" style="margin-top:10px">${sanitize(m.body.content)}</div>`); } catch (e) { sheet(err(e)); } },
+    try { const m = await g(`/me/messages/${id}?$select=subject,from,receivedDateTime,body,webLink,toRecipients,isDraft,isRead,internetMessageId`);
+      const draft = m.isDraft;
+      sheet(`<div class="t" style="font-size:17px;padding-right:30px">${esc(m.subject)}</div><div class="s">${draft ? 'Draft to ' + esc((m.toRecipients || []).map(t => t.emailAddress.address).join(', ')) : esc(m.from && m.from.emailAddress.name)} · ${esc(dfmt(m.receivedDateTime, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}))}</div>
+      <div class="acts">${draft ? `<button class="btn pri" onclick="OMNI.sendDraft('${id}', this)">Send draft</button>` : `<button class="btn pri" onclick="OMNI.compose('${id}','reply')">Reply</button><button class="btn" onclick="OMNI.compose('${id}','replyAll')">Reply all</button><button class="btn" onclick="OMNI.mailAct('${id}','archive', this)">Archive</button><button class="btn" onclick="OMNI.mailAct('${id}','${m.isRead ? 'unread' : 'read'}', this)">Mark ${m.isRead ? 'unread' : 'read'}</button>`}<a class="btn" href="${esc(m.webLink)}" target="_blank" rel="noopener">Outlook</a></div>
+      <div id="composer"></div>
+      ${draft ? '' : `<div class="addrow"><input id="askc" placeholder="Ask Claude about this email (draft a reply, file it, make a To Do…)"><button class="btn" onclick="OMNI.askMail('${id}')">Queue</button></div>`}
+      <div class="mailbody" style="margin-top:10px">${sanitize(m.body.content)}</div>`);
+      if (!draft && !m.isRead) OMNI.mailAct(id, 'read');
+    } catch (e) { sheet(err(e)); } },
+  compose(id, kind) { const c = document.getElementById('composer'); c.innerHTML = `<div class="card"><div class="t">${kind === 'replyAll' ? 'Reply all' : 'Reply'}</div><textarea id="rbody" rows="6" placeholder="Type your reply"></textarea>
+      <div class="acts"><button class="btn pri" onclick="OMNI.sendReply('${id}','${kind}',true,this)">Send</button><button class="btn" onclick="OMNI.sendReply('${id}','${kind}',false,this)">Save as draft</button></div></div>`; document.getElementById('rbody').focus(); },
+  async sendReply(id, kind, now, btn) { const t = document.getElementById('rbody').value.trim(); if (!t) return toast('Type something first'); btn.disabled = true;
+    const comment = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>');
+    try { if (now) await gw(`/me/messages/${id}/${kind}`, {body: {comment}}, MAIL_SCOPES, 'Sending email');
+      else await gw(`/me/messages/${id}/${kind === 'replyAll' ? 'createReplyAll' : 'createReply'}`, {body: {comment}}, MAIL_SCOPES, 'Saving drafts');
+      toast(now ? 'Sent ✓' : 'Saved to Drafts'); delete mem.inbox; delete mem.drafts; $('#sheet').hidden = true; } catch (e) { btn.disabled = false; toast(e.message); } },
+  async sendDraft(id, btn) { if (btn) btn.disabled = true; try { await gw(`/me/messages/${id}/send`, {}, MAIL_SCOPES, 'Sending email'); toast('Sent ✓'); delete mem.drafts; $('#sheet').hidden = true; render(); } catch (e) { if (btn) btn.disabled = false; toast(e.message); } },
+  async mailAct(id, act, btn) { try {
+      if (act === 'archive') await gw(`/me/messages/${id}/move`, {body: {destinationId: 'archive'}}, MAIL_SCOPES, 'Archiving');
+      else await gw(`/me/messages/${id}`, {method: 'PATCH', body: {isRead: act === 'read'}}, MAIL_SCOPES, 'Marking read');
+      delete mem.inbox; if (btn) { toast(act === 'archive' ? 'Archived' : 'Done'); if (act === 'archive') { $('#sheet').hidden = true; render(); } } } catch (e) { if (btn) toast(e.message); } },
+  async askMail(id) { const t = document.getElementById('askc').value.trim(); if (!t) return toast('Say what you want done');
+    try { const m = await g(`/me/messages/${id}?$select=internetMessageId,subject`); await queueAdd({kind: 'email', ref: m.internetMessageId || id, title: 'Email: ' + (m.subject || ''), text: t, project: 'Org Instructions', projectId: '01a123f3-23f0-74f4-ba0d-6982b034e16d'}); toast('Queued for Claude'); document.getElementById('askc').value = ''; } catch (e) { toast(e.message); } },
+  async ask() { const t = document.getElementById('qtext').value.trim(); if (!t) return toast('Type a request'); const p = document.getElementById('qproj').value; const pr = PROJECTS.find(x => x[0] === p) || [];
+    try { await queueAdd({kind: 'ask', title: t.slice(0, 80), text: t, project: p, projectId: pr[1] || ''}); toast('Queued for Claude'); render(); } catch (e) { toast(e.message); } },
+  async answer(qid) { const t = document.getElementById('ans_' + qid).value.trim(); if (!t) return;
+    try { await queueWrite(d => { const i = d[qid]; if (i) { i.text = (i.text || '') + '\n\nTom (' + new Date().toLocaleString() + '): ' + t; i.status = 'new'; i._at = new Date().toISOString(); } }); toast('Sent back to Claude'); render(); } catch (e) { toast(e.message); } },
+  async decide(fid, status) { const path = C.paths.boards + '/content/findings.json';
+    try { const j = safeJSON(await spText(path)); const f = j.docs[fid]; if (!f) throw new Error('Card not found'); const now = new Date().toISOString();
+      f.status = status; f.decidedAt = now; f.decidedBy = 'tom (phone app)'; f._at = now; j.updatedAt = now;
+      await gw(spItem(path) + '/content', {method: 'PUT', body: JSON.stringify(j)}, WRITE_SCOPES, 'Saving'); delete mem.findings; toast(status === 'approved' ? 'Approved' : 'Skipped'); render(); } catch (e) { toast(e.message); } },
   async report(id) { sheet('<div class="loading">Opening report…</div>');
     try { const a = await g(`/me/messages/${id}/attachments?$select=id,name,contentType,size`); const files = (a.value || []).filter(x => !x.isInline);
       if (!files.length) return sheet('<div class="empty">No attachment on this email.</div>');
