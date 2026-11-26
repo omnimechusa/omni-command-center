@@ -126,6 +126,9 @@ const L = {
   bids: () => data('bids', () => spJSON(board('proposal/bids.json')), 10),
   pl: () => data('pl', () => spJSON(board('finance/pl_class.json')), 60),
   plan: () => data('plan', () => spJSON(board('finance/plan.json')), 240),
+  followups: () => data('followups', () => spJSON(board('proposal/followups.json')), 10),
+  wrap: () => data('wrap', () => spText('Open Construction Projects/Claude outputs/wrapup/wrapup.html'), 30),
+  ref: () => data('ref', () => spJSON(board('marketing/ref.json')), 600),
   qbo: () => data('qbolive', () => spJSON(board('finance/qbo/live.json')), 30),
   score: () => data('score', async () => parseCSV(await spText(board('finance/scorecard/summary.csv'))), 60),
   scoreStatus: () => data('scoreStatus', () => spJSON(board('finance/scorecard/status.json')), 60),
@@ -159,10 +162,10 @@ async function readXlsx(buf) { await loadXlsx(); const wb = XLSX.read(buf, {type
 /* ---------------- router ---------------- */
 const TABS = {
   command: [['today', 'Today'], ['todo', 'To Do'], ['admin', 'Admin To Do'], ['inbox', 'Inbox'], ['queue', 'Claude queue']],
-  construction: [['checkins', 'Daily Check-Ins'], ['jobs', 'Job Board'], ['thursday', 'Thursday Reports'], ['permits', 'Permits']],
-  sales: [['due', 'Bids due'], ['submitted', 'Submitted'], ['hold', 'On hold']],
-  finance: [['cash', 'Cash · A/R · A/P'], ['pl', 'P&L by dept'], ['score', 'Scorecard'], ['paymix', 'Payment mix'], ['tools', 'Tool Accounts']],
-  marketing: [['content', 'Content'], ['site', 'Site health'], ['uniforms', 'Uniforms'], ['reviews', 'Reviews']]
+  construction: [['checkins', 'Daily Check-Ins'], ['wrap', 'Wrap-Up'], ['jobs', 'Job Board'], ['thursday', 'Thursday Reports'], ['permits', 'Permits'], ['permitdesk', 'Permit Desk']],
+  sales: [['due', 'Bids due'], ['followups', 'Follow-ups'], ['submitted', 'Submitted'], ['hold', 'On hold'], ['kit', 'Tools'], ['bidboard', 'Bid Board']],
+  finance: [['cash', 'Cash · A/R · A/P'], ['plan', '2027 Plan'], ['pl', 'P&L by dept'], ['score', 'Scorecard'], ['paymix', 'Payment mix'], ['tools', 'Tool Accounts']],
+  marketing: [['content', 'Content'], ['site', 'Site health'], ['standout', 'How We Stand Out'], ['uniforms', 'Uniforms'], ['reviews', 'Reviews']]
 };
 let cur = store.get('route', {tab: 'command', sub: {}});
 function sub() { return cur.sub[cur.tab] || TABS[cur.tab][0][0]; }
@@ -466,9 +469,126 @@ V.marketing_reviews = async () => {
     + rs.slice(0, 40).map(r => `<div class="card ${toDo.includes(r) ? 'flag' : ''}"><div class="row"><div class="t">${esc(r.author || r.name || r.reviewer || 'Review')}</div><div class="amt">${'★'.repeat(num(r.rating || r.stars))}</div></div><div class="s">${esc(r.source || r.platform || '')} · ${esc(r.date || '')}</div>${r.text || r.comment ? `<div class="p">${esc(r.text || r.comment)}</div>` : ''}${r.reply ? `<div class="p muted">Reply: ${esc(r.reply)}</div>` : ''}</div>`).join('');
 };
 
+/* ---------------- more views (Wrap-Up, Follow-ups, Tools, Plan, Positioning) ---------------- */
+V.construction_wrap = async () => {
+  const html = await L.wrap();
+  W.construction_wrap = () => {
+    const f = document.getElementById('wrapframe'); if (!f) return;
+    f.src = URL.createObjectURL(new Blob([String(html)], {type: 'text/html'}));
+    f.onload = () => { try { f.style.height = (f.contentDocument.documentElement.scrollHeight + 20) + 'px'; } catch (_) { f.style.height = '4000px'; } };
+  };
+  return staleNote(html) + `<div class="muted">Latest Construction Wrap-Up (SharePoint wrapup.html)</div><iframe id="wrapframe" sandbox="allow-same-origin allow-popups" style="width:100%;border:0;border-radius:12px;background:#fff;min-height:70vh;margin-top:8px"></iframe>`;
+};
+
+V.sales_followups = async () => {
+  const d = await L.followups(); const who = store.get('fuWho', 'All');
+  let arr = Object.values(d.docs || {}).filter(x => x && !x._deleted);
+  const people = ['All', ...new Set(arr.map(x => x.estimator).filter(Boolean))];
+  arr = arr.filter(x => who === 'All' || x.estimator === who);
+  const open = arr.filter(x => /due|ask_next|waiting/.test(x.status || '')).sort((a, b) => (a.next_date || '9').localeCompare(b.next_date || '9'));
+  const done = arr.filter(x => !open.includes(x));
+  const total = open.reduce((s, x) => s + (x.amount || 0), 0);
+  const card = x => { const late = x.next_date && daysUntil(x.next_date) < 0; const dr = x.draft && x.draft.state === 'open' ? x.draft : null;
+    return `<div class="card ${x.status === 'due' ? (late ? 'bad' : 'flag') : x.status === 'replied' ? 'good' : ''}"><div class="row"><div><div class="t">${esc(x.job || x.bid_id)}</div><div class="s">${esc(x.company || '')}${x.contact && x.contact.name ? ' · ' + esc(x.contact.name) : ''} · ${esc(x.estimator || '')}</div></div><div class="center"><div class="amt">${x.amount ? kmoney(x.amount) : ''}</div><div class="s">${esc(x.status || '')}</div></div></div>
+    <div class="s">Sent ${esc(x.sent_date || '–')} · last touch ${esc(x.last_touch && x.last_touch.date || '–')} · step ${esc(x.step || '–')}${x.next_date ? ' · next ' + esc(x.next_date) + (late ? ' (late)' : '') : ''}</div>
+    ${dr ? `<div class="p muted">${esc(dr.body)}</div>` : ''}<div class="acts">${dr && dr.web_link ? `<a class="btn pri" href="${esc(dr.web_link)}" target="_blank" rel="noopener">Open draft in Outlook</a>` : ''}${x.contact && x.contact.email ? `<a class="btn" href="mailto:${esc(x.contact.email)}">Email</a>` : ''}</div></div>`; };
+  return staleNote(d) + `<div class="seg">${people.map(p => `<button class="${p === who ? 'on' : ''}" onclick="OMNI.set('fuWho','${esc(p)}')">${esc(p)}</button>`).join('')}</div>
+  <div class="kpis">${kpi(open.filter(x => x.status === 'due').length, 'Follow-ups due', 'hot')}${kpi(kmoney(total), 'Open proposal $')}${kpi(arr.filter(x => x.status === 'replied').length, 'Replied')}${kpi(esc(when(d.updatedAt)), 'Updated')}</div>`
+    + '<h2>To follow up</h2>' + (open.map(card).join('') || '<div class="empty">Nothing due.</div>') + (done.length ? '<h2>Other</h2>' + done.map(card).join('') : '');
+};
+
+/* Tools: private copies in SharePoint Claude outputs/boards/cc/apptools/<key>.html, run inside the app */
+const TOOLS = [['hpwh', 'HPWH sizer', 'Heat pump water heater sizing + equipment'], ['pipe', 'Pipe pricer', 'Pipe material + labor'], ['plumb', 'Plumbing pricer', 'Plumbing scope pricing'],
+  ['duct', 'Duct pricer', 'Duct takeoff pricing'], ['electrical', 'Electrical pricer', 'Electrical sub pricing'], ['permits', 'Permit Desk', 'Permits, portals, inspections'], ['proposal', 'Bid Board', 'Full Proposal Engine board']];
+V.sales_kit = async () => `<h2>Tools</h2>` + TOOLS.filter(t => !['permits', 'proposal'].includes(t[0])).map(([k, l, d]) =>
+  `<div class="card" onclick="OMNI.tool('${k}')"><div class="row"><div><div class="t">${esc(l)}</div><div class="s">${esc(d)}</div></div><span class="btn pri">Open</span></div></div>`).join('')
+  + `<div class="muted">Tools run right here from your private SharePoint copies. Saved work goes back to the same SharePoint files the desktop board uses.</div>`;
+V.sales_bidboard = async () => { setTimeout(() => OMNI.tool('proposal'), 0); return '<div class="loading">Opening the Bid Board…</div>'; };
+V.construction_permitdesk = async () => { setTimeout(() => OMNI.tool('permits'), 0); return '<div class="loading">Opening the Permit Desk…</div>'; };
+
+const ROOT = 'Open Construction Projects/Claude outputs';
+let toolFrame = null;
+async function openTool(key) {
+  const t = TOOLS.find(x => x[0] === key) || [key, key];
+  let box = document.getElementById('toolbox');
+  if (!box) { box = document.createElement('div'); box.id = 'toolbox'; document.body.appendChild(box); }
+  box.innerHTML = `<div class="toolbar"><button class="btn" id="toolclose">✕ Close</button><b>${esc(t[1])}</b><span class="muted" id="toolstat">Loading…</span></div><div id="tooltabs" class="seg" style="padding:6px 10px;margin:0;overflow-x:auto;flex-wrap:nowrap"></div><iframe id="toolframe"></iframe>`;
+  box.hidden = false; document.getElementById('toolclose').onclick = () => { box.hidden = true; box.innerHTML = ''; toolFrame = null; };
+  try {
+    const html = await data('tool.' + key, () => spText(ROOT + '/boards/cc/apptools/' + key + '.html'), 60);
+    toolFrame = document.getElementById('toolframe');
+    toolFrame.src = URL.createObjectURL(new Blob([String(html)], {type: 'text/html'}));
+    document.getElementById('toolstat').textContent = '';
+  } catch (e) { document.getElementById('toolstat').textContent = e.message; }
+}
+/* SharePoint bridge for tool pages (same protocol as the desktop Command Center: cc-rpc read/list/readUri/write/copy) */
+const WRITE_SCOPES = ['Files.ReadWrite.All'];
+async function writeToken() {
+  try { return (await pca.acquireTokenSilent({scopes: WRITE_SCOPES, account})).accessToken; }
+  catch (e) { throw new Error('Saving needs one more Microsoft approval (Files.ReadWrite.All). Ask your Microsoft admin to approve it, then try again.'); }
+}
+function listingLine(x) { return `${x.name} (${x.folder ? 'folder' : 'file'}, ${x.size || 0} bytes) file:///${C.driveId}/${x.id}`; }
+async function rpcOp(op, a) {
+  if (op === 'read') { try { return await spText(ROOT + '/' + a.path); } catch (e) { if (/404|itemNotFound/i.test(e.message)) return null; throw e; } }
+  if (op === 'list') { try { const r = await g(spItem(ROOT + (a.path ? '/' + a.path : '')) + '/children?$top=999&$select=name,id,size,folder,file');
+      return (r.value || []).map(x => ({name: x.name, type: x.folder ? 'folder' : 'file', size: x.size || 0, uri: `file:///${C.driveId}/${x.id}`, id: x.id})); }
+    catch (e) { if (/404|itemNotFound/i.test(e.message)) return null; throw e; } }
+  if (op === 'readUri') {
+    const m = String(a.uri).match(/^file:\/\/\/([^/]+)\/(.+)$/); if (!m) throw new Error('bad uri');
+    const rest = decodeURIComponent(m[2]); const base = rest.includes('/') ? `/drives/${m[1]}/root:/${enc(rest)}:` : `/drives/${m[1]}/items/${rest}`;
+    const it = await g(base + '?$select=name,id,size,folder,file');
+    if (it.folder) { const r = await g(base + '/children?$top=999&$select=name,id,size,folder,file'); return (r.value || []).map(listingLine).join('\n'); }
+    const r = await g(base + '/content', {raw: true}); return DEMO ? r : r.text();
+  }
+  if (op === 'write') {
+    const tok = await writeToken();
+    const r = await fetch(GRAPH + spItem(ROOT + '/' + a.path) + '/content', {method: 'PUT', headers: {Authorization: 'Bearer ' + tok, 'Content-Type': 'text/plain'}, body: a.content});
+    if (!r.ok) throw new Error('Save failed: ' + r.status); Object.keys(mem).forEach(k => delete mem[k]); return true;
+  }
+  if (op === 'copy') {
+    const tok = await writeToken();
+    const r = await fetch(`${GRAPH}/drives/${C.driveId}/items/${a.itemId}/copy`, {method: 'POST', headers: {Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json'}, body: JSON.stringify({parentReference: {driveId: C.driveId, id: a.parentId}, name: a.newName})});
+    if (!r.ok && r.status !== 202) throw new Error('Copy failed: ' + r.status); return 'copied';
+  }
+  throw new Error('unknown op ' + op);
+}
+window.addEventListener('message', e => {
+  const d = e.data || {}; if (d.type !== 'cc-tabs' || !toolFrame || e.source !== toolFrame.contentWindow) return;
+  const bar = document.getElementById('tooltabs'); if (!bar) return; const curTab = bar.dataset.cur || (d.tabs[0] && d.tabs[0].key);
+  bar.innerHTML = (d.tabs || []).map(t => `<button data-k="${esc(t.key)}" class="${t.key === curTab ? 'on' : ''}" style="white-space:nowrap">${esc(t.label)}${t.n ? ' (' + t.n + ')' : ''}</button>`).join('');
+  bar.querySelectorAll('button').forEach(b => b.onclick = () => { bar.dataset.cur = b.dataset.k; bar.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); toolFrame.contentWindow.postMessage({type: 'cc-tab', tab: b.dataset.k}, location.origin); });
+});
+window.addEventListener('message', async e => {
+  const d = e.data || {}; if (d.type !== 'cc-rpc' || !toolFrame || e.source !== toolFrame.contentWindow) return;
+  let msg; try { msg = {type: 'cc-rpc-res', id: d.id, ok: true, result: await rpcOp(d.op, d.args || {})}; }
+  catch (err) { msg = {type: 'cc-rpc-res', id: d.id, ok: false, error: {code: 'rpc_error', message: err.message}}; }
+  try { e.source.postMessage(msg, location.origin); } catch (_) {}
+});
+
+V.finance_plan = async () => {
+  const p = await L.plan(); const g0 = p.goal || {};
+  const depts = p.depts || [], sellers = p.sellers || [];
+  let h = `<div class="muted">2027 Business Plan targets (plan.json, read ${esc(p.source && p.source.readAt ? day(p.source.readAt) : '')})</div>
+  <div class="kpis">${kpi(kmoney(g0.company), '2027 revenue goal', 'hot')}${kpi(kmoney(g0.install), 'Install goal')}${kpi(kmoney(g0.service), 'Service goal')}${kpi(pct((g0.netPct || 0) * 100), 'Net profit target')}</div>`;
+  h += '<h2>Departments<small>2026 pace vs 2027 target</small></h2>' + depts.map(d => { const r = d.target ? d.pace2026 / d.target : 0;
+    return `<div class="card"><div class="row"><div class="t">${esc(d.name)}</div><div class="amt">${kmoney(d.target)}</div></div><div class="s">2026 YTD ${kmoney(d.ytd2026)} · pace ${kmoney(d.pace2026)} = ${pct(r * 100)} of target · ${esc(d.field || '')} / ${esc(d.office || '')}</div><div class="bar"><i style="width:${Math.min(100, r * 100).toFixed(0)}%"></i></div></div>`; }).join('');
+  h += '<h2>Sellers<small>2026 sold vs 2027 quota</small></h2>' + sellers.map(s => { const q = (s.install || 0) + (s.service || 0); const r = q ? s.sold2026 / q : 0;
+    return `<div class="card"><div class="row"><div class="t">${esc(s.name)}</div><div class="amt">${kmoney(q)}</div></div><div class="s">2026 sold ${kmoney(s.sold2026)} · install ${kmoney(s.install)} · service ${kmoney(s.service)}</div><div class="bar"><i style="width:${Math.min(100, r * 100).toFixed(0)}%"></i></div></div>`; }).join('');
+  if (p.pipeline) { const pl = p.pipeline; h += `<h2>Pipeline needed</h2><div class="kpis">${kpi(kmoney(pl.bidDollarsNeeded), 'Bid $ needed / yr')}${kpi(kmoney(pl.bidPerMonth), 'Bid $ / month')}${kpi(pct((pl.hitRate || 0) * 100), 'Hit rate (plan)')}${kpi(pl.membershipsPerMonth || '–', 'Memberships / month')}</div>`; }
+  if (p.kpis) h += '<h2>KPIs</h2><div class="tbl"><table><tr><th>KPI</th><th>Now</th><th>Target</th><th>Owner</th></tr>' + p.kpis.map(k => `<tr><td>${esc(k[0])}</td><td>${esc(k[1])}</td><td>${esc(k[2])}</td><td>${esc(k[3])}</td></tr>`).join('') + '</table></div>';
+  if (p.monthly) h += '<h2>Monthly ramp</h2><div class="tbl"><table><tr><th>Month</th><th class="n">Service</th><th class="n">Install</th></tr>' + p.monthly.map(m => `<tr><td>${esc(m[0])}</td><td class="n">${kmoney(m[1])}</td><td class="n">${kmoney(m[2])}</td></tr>`).join('') + '</table></div>';
+  if (p.source && p.source.businessPlan) h += `<div class="acts"><a class="btn" href="${esc(p.source.businessPlan)}" target="_blank" rel="noopener">Business Plan</a><a class="btn" href="${esc(p.source.revenuePlan)}" target="_blank" rel="noopener">Revenue Plan</a></div>`;
+  return h;
+};
+
+V.marketing_standout = async () => {
+  const d = await L.ref(); const so = (d.docs && d.docs.standOut && d.docs.standOut.standOut) || [];
+  return '<div class="card">' + so.map(s => `${s.l <= 1 ? `<h2>${esc(s.h)}</h2>` : `<div class="t" style="margin-top:12px">${esc(s.h)}</div>`}${(s.p || []).map(p => `<div class="p">${esc(p)}</div>`).join('')}`).join('') + '</div>';
+};
+
 /* ---------------- actions ---------------- */
 window.OMNI = {
-  go, set(k, v) { store.set(k, v); render(); },
+  go, tool: openTool, set(k, v) { store.set(k, v); render(); },
   pickList(k, id) { store.set(k, id); render(); },
   adminSet(type, v) { if (type === 'link' && !/^https?:\/\//.test(v)) return toast('Paste the full https:// link'); store.set('admin', type === 'todo' ? {type, id: v} : {type, url: v, name: 'Admin To Do'}); render(); },
   adminReset() { store.set('admin', null); render(); },
